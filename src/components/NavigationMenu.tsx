@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useStore, ViewId } from '@/store/useStore'
 import { useState } from 'react'
 import { Terminal, Kanban, Bot, FileText, Settings, Zap, Home, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
@@ -29,7 +30,7 @@ export function NavigationMenu({ isOpen, onClose }: { isOpen: boolean; onClose: 
             {/* Logo */}
             <div className={`flex items-center ${collapsed ? 'justify-center py-3' : 'gap-2.5 px-3 py-3'} mb-2`}>
               <div className="h-8 w-8 overflow-hidden rounded-xl ring-1 ring-white/10 shrink-0">
-                <img src="/LOGO.png" alt="SloerSpace" className="h-full w-full object-cover" />
+                <Image src="/LOGO.png" alt="SloerSpace" width={32} height={32} className="h-full w-full object-cover" />
               </div>
               {!collapsed && <div className="text-[13px] font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>SloerSpace</div>}
             </div>
@@ -117,7 +118,7 @@ export function NavigationMenu({ isOpen, onClose }: { isOpen: boolean; onClose: 
           <div className="flex h-full flex-col p-3">
             <div className="flex items-center gap-2.5 px-3 py-3 mb-2">
               <div className="h-8 w-8 overflow-hidden rounded-xl ring-1 ring-white/10 shrink-0">
-                <img src="/LOGO.png" alt="SloerSpace" className="h-full w-full object-cover" />
+                <Image src="/LOGO.png" alt="SloerSpace" width={32} height={32} className="h-full w-full object-cover" />
               </div>
               <div className="text-[13px] font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>SloerSpace</div>
             </div>

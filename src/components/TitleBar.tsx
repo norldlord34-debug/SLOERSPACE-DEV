@@ -1,8 +1,9 @@
 'use client'
 
-import { closeDesktopWindow, minimizeDesktopWindow, toggleDesktopWindowMaximize } from '@/lib/desktop'
+import Image from 'next/image'
+import { closeDesktopWindow, isDesktopWindowFullscreen, minimizeDesktopWindow, toggleDesktopWindowFullscreen, toggleDesktopWindowMaximize } from '@/lib/desktop'
 import { useStore, ThemeId } from '@/store/useStore'
-import { Settings, Minus, Square, X, Plus, PanelLeft, Command, Sparkles, Search, Clock, Palette } from 'lucide-react'
+import { Settings, Minus, Square, X, Plus, PanelLeft, Command, Sparkles, Search, Clock, Palette, Expand, Shrink } from 'lucide-react'
 import { useState, useEffect } from 'react'
 
 const VIEW_LABELS = {
@@ -19,9 +20,10 @@ const VIEW_LABELS = {
 }
 
 export function TitleBar({ onNavToggle, onCommandPalette }: { onNavToggle: () => void; onCommandPalette?: () => void }) {
-  const { workspaceTabs, activeTabId, setActiveTab, removeWorkspaceTab, setView, currentView, theme, setTheme } = useStore()
+  const { workspaceTabs, activeTabId, setActiveTab, removeWorkspaceTab, setView, currentView, theme, setTheme, setWizardStep } = useStore()
   const [clock, setClock] = useState('')
   const [showThemePicker, setShowThemePicker] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
   const THEMES: ThemeId[] = [
     'sloerspace','github-dark','catppuccin-mocha','rose-pine','one-dark-pro','nord',
@@ -36,6 +38,20 @@ export function TitleBar({ onNavToggle, onCommandPalette }: { onNavToggle: () =>
     return () => clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    void isDesktopWindowFullscreen().then((fullscreen) => {
+      if (!cancelled) {
+        setIsFullscreen(fullscreen)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <div
       className="h-[72px] flex items-center select-none shrink-0 relative z-50 px-4 md:px-5"
@@ -48,7 +64,7 @@ export function TitleBar({ onNavToggle, onCommandPalette }: { onNavToggle: () =>
 
         <div className="premium-panel flex items-center gap-3 px-3 py-2">
           <div className="relative h-10 w-10 overflow-hidden rounded-2xl ring-1 ring-white/10 animate-pulse-glow" style={{ animationDuration: '4s' }}>
-            <img src="/LOGO.png" alt="SloerSpace" className="h-full w-full object-cover" />
+            <Image src="/LOGO.png" alt="SloerSpace" width={40} height={40} className="h-full w-full object-cover" />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.14),transparent_60%)]" />
           </div>
           <div>
@@ -111,7 +127,7 @@ export function TitleBar({ onNavToggle, onCommandPalette }: { onNavToggle: () =>
 
         <button
           className="h-11 w-11 flex items-center justify-center rounded-[18px] border border-dashed border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--accent)] hover:border-[var(--accent)] hover:bg-[var(--accent-subtle)] transition-all shrink-0"
-          onClick={() => setView('workspace-wizard')}
+          onClick={() => { setWizardStep(1); setView('workspace-wizard') }}
           title="New workspace"
         >
           <Plus size={13} strokeWidth={2.5} />
@@ -138,7 +154,7 @@ export function TitleBar({ onNavToggle, onCommandPalette }: { onNavToggle: () =>
         >
           <Search size={12} />
           Search
-          <span className="premium-kbd text-[9px] ml-1">⌘K</span>
+          <span className="premium-kbd text-[9px] ml-1">Ctrl+K</span>
         </button>
 
         <div className="relative">
@@ -182,6 +198,18 @@ export function TitleBar({ onNavToggle, onCommandPalette }: { onNavToggle: () =>
         </button>
 
         <div className="flex items-center gap-1 rounded-[20px] border border-[var(--border)] bg-[rgba(9,15,24,0.7)] p-1 relative z-[100]" style={{ pointerEvents: 'auto' }}>
+          <button
+            className="w-8 h-8 flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--surface-3)] rounded-xl transition-colors cursor-pointer"
+            onClick={async (e) => {
+              e.stopPropagation()
+              const fullscreen = await toggleDesktopWindowFullscreen()
+              setIsFullscreen(fullscreen)
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          >
+            {isFullscreen ? <Shrink size={11} /> : <Expand size={11} />}
+          </button>
           <button
             className="w-8 h-8 flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--surface-3)] rounded-xl transition-colors cursor-pointer"
             onClick={(e) => { e.stopPropagation(); void minimizeDesktopWindow() }}

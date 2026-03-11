@@ -6,6 +6,26 @@ export type ThemeId =
   | 'nord' | 'dracula' | 'everforest-dark' | 'poimandres' | 'oled-dark' | 'neon-tech'
   | 'synthwave' | 'catppuccin-latte' | 'github-light' | 'rose-pine-dawn'
 
+export interface CustomThemePreset {
+  id: string
+  name: string
+  mode: 'dark' | 'light'
+  colors: [string, string, string]
+  surface0: string
+  surface1: string
+  surface2: string
+  surface3: string
+  textPrimary: string
+  textSecondary: string
+  textMuted: string
+  accent: string
+  secondary: string
+  border: string
+  terminalBg: string
+  terminalText: string
+  description: string
+}
+
 export type ViewId = 'home' | 'terminal' | 'kanban' | 'agents' | 'prompts' | 'settings' | 'swarm-launch' | 'swarm-dashboard' | 'workspace-wizard' | 'login'
 export type WorkspaceViewId = Extract<ViewId, 'terminal' | 'swarm-dashboard'>
 export type WorkspaceKind = 'terminal' | 'swarm'
@@ -136,6 +156,7 @@ export interface LaunchSwarmPayload {
 
 export interface AppState {
   theme: ThemeId
+  customTheme: CustomThemePreset | null
   currentView: ViewId
   settingsTab: SettingsTab
   workspaceTabs: WorkspaceTab[]
@@ -166,6 +187,8 @@ export interface AppState {
   commandSnippets: Array<{ id: string; name: string; command: string }>
 
   setTheme: (theme: ThemeId) => void
+  applyCustomTheme: (theme: CustomThemePreset) => void
+  clearCustomTheme: () => void
   setView: (view: ViewId) => void
   setSettingsTab: (tab: SettingsTab) => void
   removeWorkspaceTab: (id: string) => void
@@ -253,12 +276,135 @@ const getFallbackWorkingDirectory = () => {
   return '/'
 }
 
-const applyTheme = (theme: ThemeId) => {
+const parseColorToRgb = (input: string) => {
+  const value = input.trim()
+
+  if (value.startsWith('#')) {
+    const normalized = value.slice(1)
+
+    if (normalized.length === 3) {
+      return {
+        r: parseInt(normalized[0] + normalized[0], 16),
+        g: parseInt(normalized[1] + normalized[1], 16),
+        b: parseInt(normalized[2] + normalized[2], 16),
+      }
+    }
+
+    if (normalized.length >= 6) {
+      return {
+        r: parseInt(normalized.slice(0, 2), 16),
+        g: parseInt(normalized.slice(2, 4), 16),
+        b: parseInt(normalized.slice(4, 6), 16),
+      }
+    }
+  }
+
+  const rgbMatch = value.match(/rgba?\(([^)]+)\)/i)
+  if (rgbMatch) {
+    const parts = rgbMatch[1].split(',').map((part) => Number.parseFloat(part.trim()))
+    return {
+      r: Number.isFinite(parts[0]) ? parts[0] : 0,
+      g: Number.isFinite(parts[1]) ? parts[1] : 0,
+      b: Number.isFinite(parts[2]) ? parts[2] : 0,
+    }
+  }
+
+  return { r: 127, g: 127, b: 127 }
+}
+
+const withAlpha = (color: string, alpha: number) => {
+  const { r, g, b } = parseColorToRgb(color)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+const CUSTOM_THEME_VAR_KEYS = [
+  '--surface-0',
+  '--surface-1',
+  '--surface-2',
+  '--surface-3',
+  '--surface-4',
+  '--surface-5',
+  '--text-primary',
+  '--text-secondary',
+  '--text-muted',
+  '--accent',
+  '--accent-hover',
+  '--accent-glow',
+  '--accent-subtle',
+  '--secondary',
+  '--secondary-glow',
+  '--border',
+  '--border-hover',
+  '--success',
+  '--success-glow',
+  '--warning',
+  '--warning-glow',
+  '--error',
+  '--error-glow',
+  '--info',
+  '--terminal-bg',
+  '--terminal-text',
+  '--surface-glass',
+  '--surface-glass-strong',
+] as const
+
+const applyCustomThemeVariables = (theme: CustomThemePreset | null) => {
   if (typeof document === 'undefined') {
     return
   }
 
-  document.documentElement.setAttribute('data-theme', theme === 'sloerspace' ? '' : theme)
+  const root = document.documentElement
+
+  if (!theme) {
+    for (const variable of CUSTOM_THEME_VAR_KEYS) {
+      root.style.removeProperty(variable)
+    }
+    return
+  }
+
+  const [errorTone, successTone, infoTone] = theme.colors
+
+  root.style.setProperty('--surface-0', theme.surface0)
+  root.style.setProperty('--surface-1', theme.surface1)
+  root.style.setProperty('--surface-2', theme.surface2)
+  root.style.setProperty('--surface-3', theme.surface3)
+  root.style.setProperty('--surface-4', theme.surface3)
+  root.style.setProperty('--surface-5', theme.surface3)
+  root.style.setProperty('--text-primary', theme.textPrimary)
+  root.style.setProperty('--text-secondary', theme.textSecondary)
+  root.style.setProperty('--text-muted', theme.textMuted)
+  root.style.setProperty('--accent', theme.accent)
+  root.style.setProperty('--accent-hover', theme.secondary)
+  root.style.setProperty('--accent-glow', withAlpha(theme.accent, 0.32))
+  root.style.setProperty('--accent-subtle', withAlpha(theme.accent, 0.12))
+  root.style.setProperty('--secondary', theme.secondary)
+  root.style.setProperty('--secondary-glow', withAlpha(theme.secondary, 0.24))
+  root.style.setProperty('--border', theme.border)
+  root.style.setProperty('--border-hover', withAlpha(theme.textPrimary, 0.22))
+  root.style.setProperty('--success', successTone || theme.secondary)
+  root.style.setProperty('--success-glow', withAlpha(successTone || theme.secondary, 0.24))
+  root.style.setProperty('--warning', errorTone || theme.accent)
+  root.style.setProperty('--warning-glow', withAlpha(errorTone || theme.accent, 0.24))
+  root.style.setProperty('--error', errorTone || theme.accent)
+  root.style.setProperty('--error-glow', withAlpha(errorTone || theme.accent, 0.24))
+  root.style.setProperty('--info', infoTone || theme.secondary)
+  root.style.setProperty('--terminal-bg', theme.terminalBg)
+  root.style.setProperty('--terminal-text', theme.terminalText)
+  root.style.setProperty('--surface-glass', withAlpha(theme.surface1, theme.mode === 'light' ? 0.82 : 0.76))
+  root.style.setProperty('--surface-glass-strong', withAlpha(theme.surface1, theme.mode === 'light' ? 0.94 : 0.9))
+}
+
+const applyResolvedTheme = (theme: ThemeId, customTheme: CustomThemePreset | null) => {
+  if (typeof document === 'undefined') {
+    return
+  }
+
+  const themeAttribute = customTheme
+    ? (customTheme.mode === 'light' ? 'github-light' : '')
+    : (theme === 'sloerspace' ? '' : theme)
+
+  document.documentElement.setAttribute('data-theme', themeAttribute)
+  applyCustomThemeVariables(customTheme)
 }
 
 const markActiveTabs = (tabs: WorkspaceTab[], activeId: string | null) => tabs.map((tab) => ({
@@ -291,16 +437,6 @@ const updatePaneCollection = (
   return found ? nextSessions : sessions
 }
 
-const buildStarterCommand = (): CommandBlock => ({
-  id: generateId(),
-  command: 'echo SloerSpace Terminal Ready',
-  output: 'SloerSpace Terminal Ready',
-  exitCode: 0,
-  timestamp: new Date().toLocaleTimeString(),
-  isCollapsed: false,
-  duration: '0ms',
-})
-
 const buildSwarmStarterCommand = (agentName: string, role: AgentRole): CommandBlock => ({
   id: generateId(),
   command: `echo ${agentName} boot`,
@@ -321,7 +457,7 @@ const createTerminalPanes = (paneCount: number, workingDirectory: string, config
   return Array.from({ length: paneCount }, (_, index): TerminalPane => ({
     id: generateId(),
     cwd: workingDirectory,
-    commands: [buildStarterCommand()],
+    commands: [],
     agentCli: assignedAgents[index],
     isActive: index === 0,
   }))
@@ -746,6 +882,57 @@ const normalizeUserProfile = (value: unknown) => {
   }
 }
 
+const normalizeCustomTheme = (value: unknown): CustomThemePreset | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const colors = Array.isArray(value.colors)
+    ? value.colors.flatMap((entry) => typeof entry === 'string' ? [entry] : []).slice(0, 3)
+    : []
+
+  const preset: CustomThemePreset = {
+    id: getString(value.id) || 'custom-imported',
+    name: getString(value.name) || 'Custom Theme',
+    mode: value.mode === 'light' ? 'light' : 'dark',
+    colors: [
+      colors[0] || getString(value.accent) || '#ff6f96',
+      colors[1] || getString(value.secondary) || '#28e7c5',
+      colors[2] || getString(value.textMuted) || '#8fc2ff',
+    ],
+    surface0: getString(value.surface0),
+    surface1: getString(value.surface1),
+    surface2: getString(value.surface2),
+    surface3: getString(value.surface3),
+    textPrimary: getString(value.textPrimary),
+    textSecondary: getString(value.textSecondary),
+    textMuted: getString(value.textMuted),
+    accent: getString(value.accent),
+    secondary: getString(value.secondary),
+    border: getString(value.border),
+    terminalBg: getString(value.terminalBg),
+    terminalText: getString(value.terminalText),
+    description: getString(value.description) || 'Imported custom theme preset',
+  }
+
+  const requiredFields = [
+    preset.surface0,
+    preset.surface1,
+    preset.surface2,
+    preset.surface3,
+    preset.textPrimary,
+    preset.textSecondary,
+    preset.textMuted,
+    preset.accent,
+    preset.secondary,
+    preset.border,
+    preset.terminalBg,
+    preset.terminalText,
+  ]
+
+  return requiredFields.every(Boolean) ? preset : null
+}
+
 const normalizePersistedState = (value: unknown): Partial<AppState> | null => {
   const persistedState = isRecord(value) && isRecord(value.state) ? value.state : value
 
@@ -759,6 +946,7 @@ const normalizePersistedState = (value: unknown): Partial<AppState> | null => {
 
   return {
     theme: getEnumValue(THEME_IDS, persistedState.theme, 'sloerspace'),
+    customTheme: normalizeCustomTheme(persistedState.customTheme),
     currentView: getEnumValue(VIEW_IDS, persistedState.currentView, 'home'),
     settingsTab: getEnumValue(SETTINGS_TAB_IDS, persistedState.settingsTab, 'appearance'),
     workspaceTabs: markActiveTabs(workspaceTabs, normalizedActiveTabId),
@@ -778,6 +966,7 @@ const normalizePersistedState = (value: unknown): Partial<AppState> | null => {
 export const useStore = create<AppState>()(persist(
   (set, get) => ({
     theme: 'sloerspace',
+    customTheme: null,
     currentView: 'home',
     settingsTab: 'appearance',
     workspaceTabs: [],
@@ -803,8 +992,17 @@ export const useStore = create<AppState>()(persist(
     commandSnippets: [],
 
     setTheme: (theme) => {
-      applyTheme(theme)
-      set({ theme })
+      applyResolvedTheme(theme, null)
+      set({ theme, customTheme: null })
+    },
+    applyCustomTheme: (customTheme) => {
+      applyResolvedTheme(get().theme, customTheme)
+      set({ customTheme })
+    },
+    clearCustomTheme: () => {
+      const currentTheme = get().theme
+      applyResolvedTheme(currentTheme, null)
+      set({ customTheme: null })
     },
     setView: (view) => set({ currentView: view }),
     setSettingsTab: (tab) => set({ settingsTab: tab }),
@@ -1189,7 +1387,7 @@ export const useStore = create<AppState>()(persist(
   }),
   {
     name: 'sloerspace-dev-store',
-    version: 6,
+    version: 7,
     storage: createJSONStorage(() => localStorage),
     migrate: (persistedState, version) => {
       const state = persistedState as Record<string, unknown>
@@ -1202,10 +1400,14 @@ export const useStore = create<AppState>()(persist(
         state.starredCommands = []
         state.commandSnippets = []
       }
+      if (version < 7) {
+        state.customTheme = null
+      }
       return state as never
     },
     partialize: (state) => ({
       theme: state.theme,
+      customTheme: state.customTheme,
       currentView: state.currentView,
       settingsTab: state.settingsTab,
       workspaceTabs: state.workspaceTabs,
@@ -1243,7 +1445,7 @@ export const useStore = create<AppState>()(persist(
     },
     onRehydrateStorage: () => (state) => {
       if (state?.theme) {
-        applyTheme(state.theme)
+        applyResolvedTheme(state.theme, state.customTheme ?? null)
       }
     },
   },

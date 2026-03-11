@@ -1,6 +1,6 @@
 'use client'
 
-import { formatCommandDuration, runTerminalCommand, openFolderDialog, cancelRunningCommand, getGitBranch } from '@/lib/desktop'
+import { formatCommandDuration, runTerminalCommand, openFolderDialog, cancelRunningCommand, getGitBranch, getSystemInfo, SystemInfo } from '@/lib/desktop'
 import { useStore, CommandBlock, TerminalPane, generateId } from '@/store/useStore'
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import {
@@ -53,6 +53,78 @@ function getTimeAgo(timestamp: string) {
   } catch { return timestamp }
 }
 
+const TERMINAL_GRID_COLUMNS: Record<number, number> = {
+  1: 1,
+  2: 2,
+  3: 3,
+  4: 2,
+  5: 3,
+  6: 3,
+  7: 4,
+  8: 4,
+  9: 3,
+  10: 5,
+  11: 4,
+  12: 4,
+  13: 5,
+  14: 7,
+  15: 5,
+  16: 4,
+}
+
+function getGridColumnsForPaneCount(count: number) {
+  if (count <= 1) {
+    return 1
+  }
+
+  return TERMINAL_GRID_COLUMNS[count] ?? Math.min(6, Math.max(2, Math.ceil(Math.sqrt(count))))
+}
+
+function getFriendlyShellName(shell?: string | null) {
+  if (!shell) return 'Shell'
+
+  const normalized = shell.toLowerCase()
+  if (normalized.includes('powershell')) return 'PowerShell'
+  if (normalized.includes('pwsh')) return 'PowerShell 7'
+  if (normalized.includes('cmd')) return 'Command Prompt'
+  if (normalized.includes('zsh')) return 'zsh'
+  if (normalized.includes('bash')) return 'bash'
+  if (normalized.includes('fish')) return 'fish'
+  return shell
+}
+
+function getFriendlyOsName(os?: string | null) {
+  if (!os) return 'Desktop'
+  if (os === 'windows') return 'Windows'
+  if (os === 'macos') return 'macOS'
+  if (os === 'linux') return 'Linux'
+  return os
+}
+
+function getClientShellFallback() {
+  if (typeof navigator === 'undefined') return 'Shell'
+  return navigator.userAgent.includes('Windows') ? 'PowerShell' : 'Shell'
+}
+
+function getClientOsFallback() {
+  if (typeof navigator === 'undefined') return 'Desktop'
+  if (navigator.userAgent.includes('Windows')) return 'Windows'
+  if (navigator.userAgent.includes('Mac')) return 'macOS'
+  return 'Linux'
+}
+
+function getPromptPreview(cwd: string, shellName: string) {
+  if (shellName.toLowerCase().includes('powershell')) {
+    return `PS ${cwd}>`
+  }
+
+  if (shellName.toLowerCase().includes('command prompt')) {
+    return `${cwd}>`
+  }
+
+  return `${cwd} $`
+}
+
 const URL_REGEX = /https?:\/\/[^\s<>"']+/g
 
 const COMMON_COMMANDS = [
@@ -67,6 +139,8 @@ const COMMON_COMMANDS = [
   'ping', 'curl', 'wget', 'ssh', 'scp',
   'code .', 'explorer .', 'open .',
 ]
+
+const EMPTY_COMMAND_HISTORY: string[] = []
 
 /* ── ANSI escape code parser ─────────────────────────────────── */
 
@@ -401,13 +475,23 @@ const KEYBOARD_SHORTCUTS = [
   { keys: 'Ctrl+0', desc: 'Reset zoom' },
 ]
 
-const WelcomeMessage = React.memo(function WelcomeMessage({ cwd }: { cwd: string }) {
+const WelcomeMessage = React.memo(function WelcomeMessage({ cwd, shellName, osName }: { cwd: string; shellName: string; osName: string }) {
+  const promptPreview = getPromptPreview(cwd, shellName)
+
   return (
     <div className="px-6 py-8 flex flex-col items-center justify-center text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl mb-4" style={{ background: 'linear-gradient(135deg, var(--accent), rgba(40,231,197,0.7))', boxShadow: '0 8px 32px rgba(79,140,255,0.25)' }}>
         <Terminal size={20} className="text-white" />
       </div>
       <div className="text-[14px] font-bold mb-1" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Ready</div>
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+        <span className="rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--accent)' }}>
+          {shellName}
+        </span>
+        <span className="rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-secondary)' }}>
+          {osName}
+        </span>
+      </div>
       <div className="font-mono text-[11px] leading-relaxed space-y-1 mt-3" style={{ color: 'var(--text-muted)' }}>
         <div className="flex items-center gap-2 justify-center">
           <FolderOpen size={11} style={{ color: 'var(--accent)' }} />
@@ -417,6 +501,10 @@ const WelcomeMessage = React.memo(function WelcomeMessage({ cwd }: { cwd: string
           <Sparkles size={11} style={{ color: 'var(--warning)' }} />
           <span>Type a command below and press <span className="premium-kbd text-[9px] mx-0.5">Enter</span></span>
         </div>
+      </div>
+      <div className="mt-5 w-full max-w-[420px] rounded-[20px] border border-[var(--border)] bg-[rgba(2,6,14,0.72)] px-4 py-3 text-left font-mono text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+        <span style={{ color: 'var(--accent)' }}>{promptPreview}</span>
+        <span style={{ color: 'var(--text-primary)' }}> </span>
       </div>
       <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-1 text-[9px] font-mono" style={{ color: 'var(--text-muted)' }}>
         {KEYBOARD_SHORTCUTS.map((s) => (
@@ -461,13 +549,16 @@ function RunningIndicator({ paneId }: { paneId: string }) {
 
 /* ── Terminal Pane (memoized) ────────────────────────────────── */
 
-const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaximize, isMaximized, isFocused, broadcastPanes }: {
+const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaximize, isMaximized, isFocused, broadcastPanes, shellName, osName, onActivate }: {
   pane: TerminalPane
   isOnly: boolean
   onMaximize: () => void
   isMaximized: boolean
   isFocused: boolean
   broadcastPanes?: TerminalPane[]
+  shellName: string
+  osName: string
+  onActivate?: () => void
 }) {
   const addCommandBlock = useStore((s) => s.addCommandBlock)
   const toggleCommandCollapse = useStore((s) => s.toggleCommandCollapse)
@@ -498,7 +589,7 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const activeCommandId = useRef<string | null>(null)
-  const persistedHistory = pane.commandHistory ?? []
+  const persistedHistory = useMemo(() => pane.commandHistory ?? EMPTY_COMMAND_HISTORY, [pane.commandHistory])
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -713,10 +804,11 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
   return (
     <div
       className="flex flex-col h-full overflow-hidden rounded-xl transition-all duration-200"
+      onMouseDown={() => onActivate?.()}
       style={{
         background: 'var(--terminal-bg)',
-        border: `1px solid ${focused ? 'var(--accent)' : 'rgba(255,255,255,0.06)'}`,
-        boxShadow: focused ? '0 0 0 1px var(--accent), 0 4px 24px rgba(79,140,255,0.08)' : '0 2px 12px rgba(0,0,0,0.2)',
+        border: `1px solid ${(focused || isFocused) ? 'var(--accent)' : 'rgba(255,255,255,0.06)'}`,
+        boxShadow: (focused || isFocused) ? '0 0 0 1px var(--accent), 0 4px 24px rgba(79,140,255,0.08)' : '0 2px 12px rgba(0,0,0,0.2)',
       }}
     >
       {/* ── Pane header - macOS style ── */}
@@ -744,6 +836,10 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
               <GitBranch size={8} /> {gitBranch}
             </span>
           )}
+          <span className="hidden md:flex items-center gap-1 text-[8px] font-mono px-1.5 py-0.5 rounded-md"
+            style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' }}>
+            {shellName}
+          </span>
           {running && (
             <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-md animate-pulse"
               style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
@@ -835,7 +931,7 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
         onClick={() => inputRef.current?.focus()}
         onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY }) }}
       >
-        {pane.commands.length === 0 && <WelcomeMessage cwd={pane.cwd} />}
+        {pane.commands.length === 0 && <WelcomeMessage cwd={pane.cwd} shellName={shellName} osName={osName} />}
         {filteredCommands.map((block) => (
           <CommandBlockUI key={block.id} block={block} onToggle={() => toggleCommandCollapse(pane.id, block.id)} onRerun={(cmd) => void executeCommand(cmd)} />
         ))}
@@ -1228,18 +1324,36 @@ export function TerminalView() {
     [workspaceTabs, activeTabId]
   )
 
-  const defaultViewMode: ViewMode = terminalPanes.length <= 1 ? 'focus'
+  const preferredViewMode: ViewMode = terminalPanes.length <= 1 ? 'focus'
     : terminalPanes.length <= 2 ? 'split'
     : terminalPanes.length <= 4 ? 'quad'
-    : 'focus'
+    : 'grid'
 
-  const [viewMode, setViewMode] = useState<ViewMode>(defaultViewMode)
+  const [viewMode, setViewMode] = useState<ViewMode>(preferredViewMode)
   const [activePaneId, setActivePaneId] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [broadcastMode, setBroadcastMode] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
+  const previousTabIdRef = useRef<string | null>(null)
 
   const runningPanes = terminalPanes.filter((p) => p.isRunning).length
+  const shellName = systemInfo ? getFriendlyShellName(systemInfo.shell) : getClientShellFallback()
+  const osName = systemInfo ? getFriendlyOsName(systemInfo.os) : getClientOsFallback()
+
+  useEffect(() => {
+    let cancelled = false
+
+    void getSystemInfo().then((info) => {
+      if (!cancelled && info) {
+        setSystemInfo(info)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Sync active pane with available panes
   useEffect(() => {
@@ -1248,10 +1362,22 @@ export function TerminalView() {
     }
   }, [terminalPanes, activePaneId])
 
+  useEffect(() => {
+    if (activeTabId && previousTabIdRef.current !== activeTabId) {
+      setViewMode(preferredViewMode)
+      previousTabIdRef.current = activeTabId
+    }
+  }, [activeTabId, preferredViewMode])
+
   // Auto-select best view mode when pane count changes
   useEffect(() => {
-    if (terminalPanes.length <= 1) setViewMode('focus')
-    else if (terminalPanes.length > 4 && viewMode === 'grid') setViewMode('focus')
+    if (terminalPanes.length <= 1 && viewMode !== 'focus') {
+      setViewMode('focus')
+    } else if (terminalPanes.length <= 2 && (viewMode === 'quad' || viewMode === 'grid')) {
+      setViewMode('split')
+    } else if (terminalPanes.length <= 4 && viewMode === 'grid') {
+      setViewMode('quad')
+    }
   }, [terminalPanes.length, viewMode])
 
   // Keyboard shortcuts for pane navigation
@@ -1313,10 +1439,7 @@ export function TerminalView() {
   const gridCols = viewMode === 'focus' ? 1
     : viewMode === 'split' ? 2
     : viewMode === 'quad' ? 2
-    : terminalPanes.length <= 2 ? 2
-    : terminalPanes.length <= 4 ? 2
-    : terminalPanes.length <= 9 ? 3
-    : 4
+    : getGridColumnsForPaneCount(terminalPanes.length)
 
   if (terminalPanes.length === 0) {
     return (
@@ -1350,8 +1473,8 @@ export function TerminalView() {
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
       {/* ── Top toolbar ── */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--border)', background: 'rgba(0,0,0,0.1)' }}>
-        <div className="flex items-center gap-3">
+      <div className="shrink-0 flex items-center justify-between gap-4 px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, rgba(7,12,20,0.84), rgba(4,8,14,0.72))' }}>
+        <div className="flex min-w-0 items-center gap-3">
           <div className="flex items-center gap-2">
             <Terminal size={15} style={{ color: 'var(--accent)' }} />
             <span className="text-[13px] font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
@@ -1362,6 +1485,16 @@ export function TerminalView() {
           <span className="text-[10px] font-mono truncate max-w-[200px]" style={{ color: 'var(--text-muted)' }}>
             {activeWorkspace?.workingDirectory ?? terminalPanes[0]?.cwd}
           </span>
+          <div className="hidden xl:flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
+              <Terminal size={9} />
+              {shellName}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-secondary)' }}>
+              {osName}
+              {systemInfo?.arch ? ` · ${systemInfo.arch.toUpperCase()}` : ''}
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -1494,6 +1627,7 @@ export function TerminalView() {
                 key={pane.id}
                 pane={pane}
                 isOnly={terminalPanes.length === 1}
+                onActivate={() => setActivePaneId(pane.id)}
                 onMaximize={() => {
                   if (viewMode === 'focus' && activePaneId === pane.id) {
                     setViewMode(terminalPanes.length <= 2 ? 'split' : 'quad')
@@ -1505,6 +1639,8 @@ export function TerminalView() {
                 isMaximized={viewMode === 'focus' && activePaneId === pane.id && terminalPanes.length > 1}
                 isFocused={activePaneId === pane.id}
                 broadcastPanes={broadcastMode ? terminalPanes : undefined}
+                shellName={shellName}
+                osName={osName}
               />
             ))}
           </div>

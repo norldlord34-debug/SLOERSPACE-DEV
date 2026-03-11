@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useStore } from '@/store/useStore'
 import { useState } from 'react'
 import { Mail, Lock, Eye, EyeOff, Zap, Terminal, Kanban, Bot, ArrowRight, Sparkles } from 'lucide-react'
@@ -46,7 +47,7 @@ export function LoginPage() {
         <div className="hidden lg:flex flex-col justify-center">
           <div className="flex items-center gap-3 mb-6">
             <div className="h-12 w-12 rounded-2xl overflow-hidden ring-1 ring-white/10">
-              <img src="/LOGO.png" alt="SloerSpace" className="h-full w-full object-cover" />
+              <Image src="/LOGO.png" alt="SloerSpace" width={48} height={48} className="h-full w-full object-cover" />
             </div>
             <div>
               <div className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: 'var(--text-muted)' }}>SloerSpace</div>
@@ -81,7 +82,7 @@ export function LoginPage() {
         <div className="premium-panel-elevated p-6 md:p-8">
           <div className="flex items-center gap-3 mb-6 lg:hidden">
             <div className="h-10 w-10 rounded-xl overflow-hidden ring-1 ring-white/10">
-              <img src="/LOGO.png" alt="SloerSpace" className="h-full w-full object-cover" />
+              <Image src="/LOGO.png" alt="SloerSpace" width={40} height={40} className="h-full w-full object-cover" />
             </div>
             <div className="text-[16px] font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>SloerSpace Dev</div>
           </div>

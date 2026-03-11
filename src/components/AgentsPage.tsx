@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { generateId, useStore } from '@/store/useStore'
 import { useState } from 'react'
 import { Bot, Plus, X, Sparkles, ArrowRight, Edit3, Copy, Check } from 'lucide-react'
@@ -133,7 +134,7 @@ export function AgentsPage() {
           <div className="premium-panel-elevated w-[520px] max-w-[calc(100vw-32px)] p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-4">
               <div className="w-9 h-9 rounded-[16px] overflow-hidden border border-white/10">
-                <img src="/LOGO.png" alt="SloerSpace" className="w-full h-full object-cover" />
+                <Image src="/LOGO.png" alt="SloerSpace" width={36} height={36} className="w-full h-full object-cover" />
               </div>
               <h2 className="text-lg font-bold flex-1" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Create Agent</h2>
               <button onClick={() => setShowCreate(false)} className="p-1 rounded-md transition-colors" style={{ color: 'var(--text-muted)' }}
@@ -168,7 +169,7 @@ export function AgentsPage() {
           <div className="premium-panel-elevated w-[520px] max-w-[calc(100vw-32px)] p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-4">
               <div className="w-9 h-9 rounded-[16px] overflow-hidden border border-white/10">
-                <img src="/LOGO.png" alt="SloerSpace" className="w-full h-full object-cover" />
+                <Image src="/LOGO.png" alt="SloerSpace" width={36} height={36} className="w-full h-full object-cover" />
               </div>
               <h2 className="text-lg font-bold flex-1" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Edit Agent</h2>
               <button onClick={() => setEditingAgent(null)} className="p-1 rounded-md transition-colors" style={{ color: 'var(--text-muted)' }}><X size={15} /></button>

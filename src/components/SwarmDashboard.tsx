@@ -1,7 +1,8 @@
 'use client'
 
+import Image from 'next/image'
 import { useStore } from '@/store/useStore'
-import type { AgentRole, SwarmAgent, SwarmMessage } from '@/store/useStore'
+import type { AgentRole, SwarmAgent, SwarmMessage, SwarmSession } from '@/store/useStore'
 import { useState, useEffect, useMemo } from 'react'
 import {
   StopCircle, Activity, Bot, FolderOpen,
@@ -21,6 +22,10 @@ const ROLE_META: Record<AgentRole, {
   scout: { label: 'Scout', color: 'var(--secondary)', icon: Search },
   custom: { label: 'Custom', color: 'var(--text-secondary)', icon: Sparkles },
 }
+
+const EMPTY_SWARM_AGENTS: SwarmAgent[] = []
+const EMPTY_SWARM_MESSAGES: SwarmMessage[] = []
+const BRIEFING_ROLE_ORDER: AgentRole[] = ['coord', 'builder', 'reviewer', 'scout', 'custom']
 
 function formatElapsed(totalSeconds: number) {
   return `${Math.floor(totalSeconds / 60)}m ${(totalSeconds % 60).toString().padStart(2, '0')}s`
@@ -94,6 +99,52 @@ function buildGraphNodes(agents: SwarmAgent[]) {
     height: Math.max(940, nodes.reduce((max, node) => Math.max(max, node.y), 0) + 120),
     nodes,
   }
+}
+
+function buildBriefingSections(session: SwarmSession, agents: SwarmAgent[], messages: SwarmMessage[]) {
+  const roleSummary = BRIEFING_ROLE_ORDER
+    .map((role) => ({ role, count: agents.filter((agent) => agent.role === role).length }))
+    .filter((item) => item.count > 0)
+    .map((item) => `${ROLE_META[item.role].label}: ${item.count}`)
+
+  return [
+    {
+      eyebrow: 'Mission summary',
+      title: 'One shared mission, one operating context',
+      body: session.objective,
+      bullets: [
+        `Working directory: ${session.workingDirectory}`,
+        session.knowledgeFiles.length > 0 ? `${session.knowledgeFiles.length} linked knowledge files` : 'No linked knowledge files yet',
+        `${agents.length} active role lanes in the mission`,
+      ],
+    },
+    {
+      eyebrow: 'Coordination model',
+      title: 'Specialized roles replace generic agent drift',
+      body: 'SloerSwarm separates coordination, implementation, research, review, and custom duties so the mission behaves more like a senior engineering team than a single looping assistant.',
+      bullets: roleSummary.length > 0 ? roleSummary : ['Roles will appear here as agents are assigned'],
+    },
+    {
+      eyebrow: 'Execution',
+      title: 'Parallel work stays tied to the same source of truth',
+      body: 'Agents inherit the same brief and working directory, which reduces context fragmentation and keeps implementation, scouting, and review aligned.',
+      bullets: [
+        `${agents.filter((agent) => agent.status === 'running').length} agents currently running`,
+        `${agents.filter((agent) => agent.status === 'complete').length} agents marked complete`,
+        `${agents.filter((agent) => agent.status === 'error').length} agents reporting errors`,
+      ],
+    },
+    {
+      eyebrow: 'Operator loop',
+      title: 'The operator stays in control throughout the mission',
+      body: 'Broadcast messages, focused directives, lane filters, stop controls, and terminal access remain available while the mission is active.',
+      bullets: [
+        `${messages.filter((message) => message.senderRole === 'operator').length} operator messages recorded`,
+        `${messages.filter((message) => message.kind === 'alert').length} alerts preserved in session history`,
+        'Review lanes and live activity remain visible while execution evolves',
+      ],
+    },
+  ]
 }
 
 function ConversationFeed({
@@ -182,34 +233,52 @@ export function SwarmDashboard() {
   const [elapsed, setElapsed] = useState(0)
   const [zoom, setZoom] = useState(70)
   const [nowMs, setNowMs] = useState(Date.now())
-  const [mode, setMode] = useState<'mission' | 'console'>('mission')
+  const [mode, setMode] = useState<'mission' | 'console' | 'briefing'>('mission')
+  const [roleFilter, setRoleFilter] = useState<'all' | AgentRole>('all')
   const [focusedAgentId, setFocusedAgentId] = useState<'all' | string>('all')
   const [messageTarget, setMessageTarget] = useState<'all' | string>('all')
   const [draftMessage, setDraftMessage] = useState('')
-  const sessionAgents = swarmSession?.agents ?? []
-  const sessionMessages = swarmSession?.messages ?? []
-  const graphLayout = useMemo(() => buildGraphNodes(sessionAgents), [sessionAgents])
+  const sessionAgents = swarmSession?.agents ?? EMPTY_SWARM_AGENTS
+  const sessionMessages = swarmSession?.messages ?? EMPTY_SWARM_MESSAGES
+  const visibleAgents = useMemo(
+    () => roleFilter === 'all' ? sessionAgents : sessionAgents.filter((agent) => agent.role === roleFilter),
+    [sessionAgents, roleFilter]
+  )
+  const visibleAgentIds = useMemo(() => visibleAgents.map((agent) => agent.id), [visibleAgents])
+  const visibleAgentIdSet = useMemo(() => new Set(visibleAgentIds), [visibleAgentIds])
+  const graphLayout = useMemo(() => buildGraphNodes(visibleAgents), [visibleAgents])
   const graphConnections = useMemo(() => {
     const coordinatorNodes = graphLayout.nodes.filter((node) => node.agent.role === 'coord')
-    const fallbackNode = graphLayout.nodes[0]
+
+    if (coordinatorNodes.length === 0) {
+      return []
+    }
 
     return graphLayout.nodes
       .filter((node) => node.agent.role !== 'coord')
       .map((node, index) => ({
-        from: coordinatorNodes[index % Math.max(1, coordinatorNodes.length)] ?? fallbackNode,
+        from: coordinatorNodes[index % coordinatorNodes.length],
         to: node,
       }))
-      .filter((connection) => connection.from && connection.to)
+      .filter((connection) => connection.from && connection.to && connection.from.agent.id !== connection.to.agent.id)
   }, [graphLayout])
   const activityItems = useMemo(() => {
-    const messageItems = sessionMessages.map((message) => ({
+    const scopedMessages = roleFilter === 'all'
+      ? sessionMessages
+      : sessionMessages.filter((message) => (
+        message.senderRole === 'operator'
+        || message.senderRole === 'system'
+        || visibleAgentIdSet.has(message.senderId)
+        || visibleAgentIdSet.has(message.target)
+      ))
+    const messageItems = scopedMessages.map((message) => ({
       id: message.id,
       label: message.senderName,
       meta: message.senderRole,
       detail: message.content,
       createdAt: message.createdAt,
     }))
-    const agentItems = sessionAgents.map((agent) => ({
+    const agentItems = visibleAgents.map((agent) => ({
       id: `agent-${agent.id}`,
       label: agent.name,
       meta: agent.role,
@@ -220,7 +289,11 @@ export function SwarmDashboard() {
     return [...messageItems, ...agentItems]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 24)
-  }, [sessionAgents, sessionMessages])
+  }, [sessionMessages, visibleAgents, visibleAgentIdSet, roleFilter])
+  const briefingSections = useMemo(
+    () => (swarmSession ? buildBriefingSections(swarmSession, sessionAgents, sessionMessages) : []),
+    [sessionMessages, sessionAgents, swarmSession],
+  )
 
   useEffect(() => {
     if (!swarmSession?.startedAt) {
@@ -245,20 +318,40 @@ export function SwarmDashboard() {
 
   useEffect(() => {
     if (!swarmSession) {
+      setRoleFilter('all')
       setFocusedAgentId('all')
       setMessageTarget('all')
       setDraftMessage('')
       return
     }
 
-    if (focusedAgentId !== 'all' && !swarmSession.agents.some((agent) => agent.id === focusedAgentId)) {
+    if (focusedAgentId !== 'all' && !visibleAgents.some((agent) => agent.id === focusedAgentId)) {
       setFocusedAgentId('all')
     }
 
-    if (messageTarget !== 'all' && !swarmSession.agents.some((agent) => agent.id === messageTarget)) {
+    if (messageTarget !== 'all' && !visibleAgents.some((agent) => agent.id === messageTarget)) {
       setMessageTarget('all')
     }
-  }, [swarmSession, focusedAgentId, messageTarget])
+  }, [swarmSession, visibleAgents, focusedAgentId, messageTarget])
+
+  const filteredMessages = useMemo(() => {
+    const scopedMessages = roleFilter === 'all'
+      ? sessionMessages
+      : sessionMessages.filter((message) => (
+        message.senderRole === 'operator'
+        || message.senderRole === 'system'
+        || visibleAgentIdSet.has(message.senderId)
+        || visibleAgentIdSet.has(message.target)
+      ))
+
+    return focusedAgentId === 'all'
+      ? scopedMessages
+      : scopedMessages.filter((message) => (
+        message.senderId === focusedAgentId
+        || message.target === focusedAgentId
+        || message.target === 'all'
+      ))
+  }, [focusedAgentId, roleFilter, sessionMessages, visibleAgentIdSet])
 
   if (!swarmSession) {
     return (
@@ -285,7 +378,7 @@ export function SwarmDashboard() {
   }
 
   const fmtElapsed = formatElapsed(elapsed)
-  const agents = sessionAgents
+  const agents = visibleAgents
   const messages = sessionMessages
   const done = agents.filter(a => a.status === 'complete').length
   const working = agents.filter(a => a.status === 'running').length
@@ -293,20 +386,21 @@ export function SwarmDashboard() {
   const coordinators = agents.filter((agent) => agent.role === 'coord')
   const executionAgents = agents.filter((agent) => agent.role !== 'coord')
   const alerts = agents.filter((agent) => agent.status === 'error').length
-  const forOperator = messages.filter((message) => message.target === 'operator' || message.kind === 'alert').length
   const readyForReview = done
   const quiet = idle
   const terminalCount = activeTabId ? (terminalSessions[activeTabId]?.length ?? 0) : 0
   const focusedAgent = focusedAgentId === 'all' ? null : agents.find((agent) => agent.id === focusedAgentId) ?? null
   const focusedRoleMeta = focusedAgent ? ROLE_META[focusedAgent.role] : null
-  const filteredMessages = focusedAgentId === 'all'
-    ? messages
-    : messages.filter((message) => (
-      message.senderId === focusedAgentId
-      || message.target === focusedAgentId
-      || message.target === 'all'
-    ))
   const compactMessages = filteredMessages.slice(-6)
+  const forOperator = filteredMessages.filter((message) => message.target === 'operator' || message.kind === 'alert').length
+  const filterLabel = roleFilter === 'all' ? 'All lanes' : ROLE_META[roleFilter].label
+  const coordinationLabel = coordinators.length > 0
+    ? `${coordinators.length} coord · ${Math.max(0, executionAgents.length)} execution`
+    : `${executionAgents.length} execution`
+  const knowledgeLabel = swarmSession.knowledgeFiles.length > 0
+    ? `${swarmSession.knowledgeFiles.length} linked files`
+    : 'No linked files'
+  const visibleCoverage = `${agents.length}/${sessionAgents.length || 1}`
   const submitMessage = () => {
     if (!draftMessage.trim()) {
       return
@@ -322,7 +416,7 @@ export function SwarmDashboard() {
       <div className="shrink-0 px-4 pt-3 pb-2 swarm-content">
         <div className="flex items-center justify-between rounded-[24px] border px-4 py-2.5" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.64)', backdropFilter: 'blur(22px) saturate(1.16)' }}>
         <div className="flex items-center gap-2 min-w-0">
-          <img src="/LOGO.png" alt="" className="h-5 w-5 rounded-md" />
+          <Image src="/LOGO.png" alt="" width={20} height={20} className="h-5 w-5 rounded-md" />
           <span className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>
             {(swarmSession.name || activeTab?.name) ?? 'SloerSwarm'}
           </span>
@@ -393,8 +487,83 @@ export function SwarmDashboard() {
           >
             <span className="inline-flex items-center gap-1.5"><MessageSquareText size={11} /> Console</span>
           </button>
+          <button
+            onClick={() => setMode('briefing')}
+            className="rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] transition-all"
+            style={{
+              background: mode === 'briefing' ? 'rgba(79,140,255,0.12)' : 'transparent',
+              color: mode === 'briefing' ? 'var(--accent)' : 'var(--text-muted)',
+            }}
+          >
+            <span className="inline-flex items-center gap-1.5"><BookOpen size={11} /> Briefing</span>
+          </button>
         </div>
       </div>
+      </div>
+
+      <div className="shrink-0 px-4 pb-3 swarm-content">
+        <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.48)', backdropFilter: 'blur(18px) saturate(1.1)' }}>
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission coverage</div>
+              <div className="mt-2 text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>{visibleCoverage}</div>
+              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>{coordinationLabel}</div>
+            </div>
+            <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.48)', backdropFilter: 'blur(18px) saturate(1.1)' }}>
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Knowledge link</div>
+              <div className="mt-2 text-[16px] font-semibold" style={{ color: swarmSession.knowledgeFiles.length > 0 ? 'var(--success)' : 'var(--text-primary)' }}>{knowledgeLabel}</div>
+              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                {mode === 'mission' ? 'Mission canvas active' : mode === 'console' ? 'Console analysis active' : 'Strategic briefing active'}
+              </div>
+            </div>
+            <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.48)', backdropFilter: 'blur(18px) saturate(1.1)' }}>
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator focus</div>
+              <div className="mt-2 text-[16px] font-semibold" style={{ color: focusedRoleMeta?.color ?? 'var(--text-primary)' }}>{focusedAgent ? focusedAgent.name : filterLabel}</div>
+              <div className="mt-1 text-[10px] line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{focusedAgent ? focusedAgent.task : 'Cross-lane supervisory view'}</div>
+            </div>
+          </div>
+
+          <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(4,8,14,0.5)', backdropFilter: 'blur(18px) saturate(1.15)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Lane filter</div>
+                <div className="mt-1 text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>Focus the mission on a single role lane without losing session state.</div>
+              </div>
+              {roleFilter !== 'all' && (
+                <span className="rounded-full px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ background: `${ROLE_META[roleFilter].color}18`, color: ROLE_META[roleFilter].color }}>
+                  filtered
+                </span>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                onClick={() => setRoleFilter('all')}
+                className="rounded-full border px-3 py-1.5 text-[10px] font-semibold transition-all"
+                style={{
+                  borderColor: roleFilter === 'all' ? 'rgba(79,140,255,0.28)' : 'rgba(255,255,255,0.08)',
+                  background: roleFilter === 'all' ? 'rgba(79,140,255,0.12)' : 'rgba(6,10,18,0.36)',
+                  color: roleFilter === 'all' ? 'var(--accent)' : 'var(--text-secondary)',
+                }}
+              >
+                All lanes
+              </button>
+              {(['coord', 'builder', 'reviewer', 'scout', 'custom'] as AgentRole[]).map((role) => (
+                <button
+                  key={role}
+                  onClick={() => setRoleFilter(role)}
+                  className="rounded-full border px-3 py-1.5 text-[10px] font-semibold transition-all"
+                  style={{
+                    borderColor: roleFilter === role ? `${ROLE_META[role].color}66` : 'rgba(255,255,255,0.08)',
+                    background: roleFilter === role ? `${ROLE_META[role].color}18` : 'rgba(6,10,18,0.36)',
+                    color: roleFilter === role ? ROLE_META[role].color : 'var(--text-secondary)',
+                  }}
+                >
+                  {ROLE_META[role].label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ── Main content ── */}
@@ -437,85 +606,115 @@ export function SwarmDashboard() {
 
                   <div className="swarm-grid-backdrop relative overflow-hidden rounded-[24px] border p-6" style={{ borderColor: 'rgba(79,140,255,0.12)', background: 'radial-gradient(circle at top, rgba(9,18,32,0.92), rgba(3,8,14,0.98))' }}>
                     <svg className="absolute inset-0 h-full w-full pointer-events-none" viewBox={`0 0 ${graphLayout.width} ${graphLayout.height}`} preserveAspectRatio="none">
-                      {graphConnections.map((connection, index) => (
-                        <path
-                          key={`${connection.to.agent.id}-${index}`}
-                          d={`M ${connection.from.x} ${connection.from.y} C ${connection.from.x} ${(connection.from.y + connection.to.y) / 2}, ${connection.to.x} ${(connection.from.y + connection.to.y) / 2}, ${connection.to.x} ${connection.to.y}`}
-                          fill="none"
-                          stroke={ROLE_META[connection.to.agent.role].color}
-                          strokeOpacity="0.46"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                        />
-                      ))}
+                      {graphConnections.map((connection, index) => {
+                        const tone = ROLE_META[connection.to.agent.role].color
+                        const activeConnection = focusedAgentId === 'all' || connection.to.agent.id === focusedAgentId || connection.from.agent.id === focusedAgentId
+                        const pathDef = `M ${connection.from.x} ${connection.from.y} C ${connection.from.x} ${(connection.from.y + connection.to.y) / 2}, ${connection.to.x} ${(connection.from.y + connection.to.y) / 2}, ${connection.to.x} ${connection.to.y}`
+
+                        return (
+                          <g key={`${connection.to.agent.id}-${index}`}>
+                            <path
+                              d={pathDef}
+                              fill="none"
+                              stroke={tone}
+                              strokeOpacity={activeConnection ? '0.14' : '0.08'}
+                              strokeWidth="6"
+                              strokeLinecap="round"
+                            />
+                            <path
+                              d={pathDef}
+                              fill="none"
+                              stroke={tone}
+                              strokeOpacity={activeConnection ? '0.72' : '0.36'}
+                              strokeWidth={activeConnection ? '2.6' : '1.8'}
+                              strokeLinecap="round"
+                              strokeDasharray="10 14"
+                              className={connection.to.agent.status === 'running' ? 'animate-pulse' : ''}
+                            />
+                          </g>
+                        )
+                      })}
                     </svg>
 
                     <div className="relative" style={{ width: `${graphLayout.width}px`, height: `${graphLayout.height}px` }}>
-                      {(['coord', 'builder', 'reviewer', 'scout', 'custom'] as AgentRole[]).map((role) => {
-                        const laneNodes = graphLayout.nodes.filter((node) => node.lane === role)
-
-                        if (laneNodes.length === 0) {
-                          return null
-                        }
-
-                        return (
-                          <div
-                            key={role}
-                            className="absolute left-1/2 -translate-x-1/2 text-[8px] font-bold uppercase tracking-[0.22em]"
-                            style={{ top: `${laneNodes[0].y - 70}px`, color: ROLE_META[role].color }}
-                          >
-                            {ROLE_META[role].label}s ({laneNodes.length})
+                      {graphLayout.nodes.length === 0 ? (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="rounded-2xl border px-5 py-4 text-center" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.72)' }}>
+                            <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>No agents in this lane</div>
+                            <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                              {roleFilter === 'all' ? 'Launch a swarm to populate the mission graph.' : `${ROLE_META[roleFilter].label} agents are not present in this mission.`}
+                            </div>
                           </div>
-                        )
-                      })}
+                        </div>
+                      ) : (
+                        <>
+                          {(['coord', 'builder', 'reviewer', 'scout', 'custom'] as AgentRole[]).map((role) => {
+                            const laneNodes = graphLayout.nodes.filter((node) => node.lane === role)
 
-                      {graphLayout.nodes.map((node, index) => {
-                        const roleMeta = ROLE_META[node.agent.role]
-                        const RoleIcon = roleMeta.icon
-                        const statusTone = getStatusTone(node.agent)
+                            if (laneNodes.length === 0) {
+                              return null
+                            }
 
-                        return (
-                          <button
-                            key={node.agent.id}
-                            onClick={() => {
-                              setFocusedAgentId(node.agent.id)
-                              setMessageTarget(node.agent.id)
-                            }}
-                            className="absolute w-[210px] rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
-                            style={{
-                              left: `${node.x - 105}px`,
-                              top: `${node.y - 42}px`,
-                              borderColor: focusedAgentId === node.agent.id ? `${roleMeta.color}66` : 'rgba(255,255,255,0.08)',
-                              background: focusedAgentId === node.agent.id ? 'rgba(10,17,28,0.98)' : 'rgba(6,12,20,0.94)',
-                              boxShadow: focusedAgentId === node.agent.id ? `0 18px 58px ${roleMeta.color}22` : '0 10px 32px rgba(0,0,0,0.18)',
-                            }}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <div className="flex h-7 w-7 items-center justify-center rounded-xl" style={{ background: `${roleMeta.color}20`, color: roleMeta.color }}>
-                                  <RoleIcon size={12} />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{node.agent.name}</div>
-                                  <div className="text-[8px] font-bold uppercase tracking-[0.18em]" style={{ color: roleMeta.color }}>{roleMeta.label}</div>
-                                </div>
+                            return (
+                              <div
+                                key={role}
+                                className="absolute left-1/2 -translate-x-1/2 text-[8px] font-bold uppercase tracking-[0.22em]"
+                                style={{ top: `${laneNodes[0].y - 70}px`, color: ROLE_META[role].color }}
+                              >
+                                {ROLE_META[role].label}s ({laneNodes.length})
                               </div>
-                              <div className="text-[8px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>{index + 1}</div>
-                            </div>
-                            <div className="mt-2 flex items-center gap-2 text-[9px]">
-                              <span className="w-2 h-2 rounded-full" style={{ background: statusTone.color }} />
-                              <span style={{ color: statusTone.color }}>{statusTone.label}</span>
-                              <span className="ml-auto font-mono" style={{ color: 'var(--text-muted)' }}>{formatAgentRuntime(node.agent, nowMs)}</span>
-                            </div>
-                            <div className="mt-2 text-[9px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>
-                              {node.agent.cli}
-                            </div>
-                            <div className="mt-1 text-[9px] leading-5 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
-                              {node.agent.task || 'Booting CLI session'}
-                            </div>
-                          </button>
-                        )
-                      })}
+                            )
+                          })}
+
+                          {graphLayout.nodes.map((node, index) => {
+                            const roleMeta = ROLE_META[node.agent.role]
+                            const RoleIcon = roleMeta.icon
+                            const statusTone = getStatusTone(node.agent)
+
+                            return (
+                              <button
+                                key={node.agent.id}
+                                onClick={() => {
+                                  setFocusedAgentId(node.agent.id)
+                                  setMessageTarget(node.agent.id)
+                                }}
+                                className="absolute w-[210px] rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
+                                style={{
+                                  left: `${node.x - 105}px`,
+                                  top: `${node.y - 42}px`,
+                                  borderColor: focusedAgentId === node.agent.id ? `${roleMeta.color}66` : 'rgba(255,255,255,0.08)',
+                                  background: focusedAgentId === node.agent.id ? 'rgba(10,17,28,0.98)' : 'rgba(6,12,20,0.94)',
+                                  boxShadow: focusedAgentId === node.agent.id ? `0 18px 58px ${roleMeta.color}22` : '0 10px 32px rgba(0,0,0,0.18)',
+                                }}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <div className="flex h-7 w-7 items-center justify-center rounded-xl" style={{ background: `${roleMeta.color}20`, color: roleMeta.color }}>
+                                      <RoleIcon size={12} />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{node.agent.name}</div>
+                                      <div className="text-[8px] font-bold uppercase tracking-[0.18em]" style={{ color: roleMeta.color }}>{roleMeta.label}</div>
+                                    </div>
+                                  </div>
+                                  <div className="text-[8px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>{index + 1}</div>
+                                </div>
+                                <div className="mt-2 flex items-center gap-2 text-[9px]">
+                                  <span className="w-2 h-2 rounded-full" style={{ background: statusTone.color }} />
+                                  <span style={{ color: statusTone.color }}>{statusTone.label}</span>
+                                  <span className="ml-auto font-mono" style={{ color: 'var(--text-muted)' }}>{formatAgentRuntime(node.agent, nowMs)}</span>
+                                </div>
+                                <div className="mt-2 text-[9px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>
+                                  {node.agent.cli}
+                                </div>
+                                <div className="mt-1 text-[9px] leading-5 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                                  {node.agent.task || 'Booting CLI session'}
+                                </div>
+                              </button>
+                            )
+                          })}
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -541,7 +740,14 @@ export function SwarmDashboard() {
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {executionAgents.map((agent) => {
+                    {executionAgents.length === 0 ? (
+                      <div className="md:col-span-2 xl:col-span-3 rounded-xl border p-5 text-center" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.54)' }}>
+                        <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>No execution agents in view</div>
+                        <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                          {roleFilter === 'all' ? 'Execution lanes will appear here when the swarm is populated.' : `The ${ROLE_META[roleFilter].label} filter is currently focused on a non-execution lane.`}
+                        </div>
+                      </div>
+                    ) : executionAgents.map((agent) => {
                       const statusTone = getStatusTone(agent)
                       const roleMeta = ROLE_META[agent.role]
 
@@ -607,7 +813,7 @@ export function SwarmDashboard() {
                 )}
               </div>
             </div>
-          ) : (
+          ) : mode === 'console' ? (
             <div className="h-full grid grid-cols-[250px_minmax(0,1fr)] gap-0">
               <div className="border-r overflow-y-auto" style={{ borderColor: 'var(--border)', background: 'rgba(4,9,18,0.72)' }}>
                 <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -725,6 +931,71 @@ export function SwarmDashboard() {
                 </div>
               </div>
             </div>
+          ) : (
+            <div className="h-full overflow-y-auto px-6 py-6">
+              <div className="mx-auto max-w-4xl">
+                <div className="swarm-panel-soft p-6 md:p-8">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full px-3 py-1 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
+                      Strategic briefing
+                    </span>
+                    <span className="rounded-full px-3 py-1 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)' }}>
+                      {swarmSession.name}
+                    </span>
+                  </div>
+
+                  <h2 className="mt-5 text-[34px] font-semibold leading-[1.05]" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '-0.04em' }}>
+                    How this swarm is structured to ship with senior-team discipline.
+                  </h2>
+
+                  <p className="mt-4 text-[13px] leading-7" style={{ color: 'var(--text-secondary)' }}>
+                    This briefing turns the current mission into a readable operating model: what the team is solving, how roles divide ownership, where context lives, and how operator control stays intact.
+                  </p>
+
+                  <div className="mt-6 grid gap-3 md:grid-cols-3">
+                    <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(4,9,18,0.52)' }}>
+                      <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission</div>
+                      <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{swarmSession.name}</div>
+                      <div className="mt-2 text-[10px] leading-6" style={{ color: 'var(--text-secondary)' }}>{swarmSession.objective}</div>
+                    </div>
+                    <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(4,9,18,0.52)' }}>
+                      <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Execution surface</div>
+                      <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{sessionAgents.length} agents · {terminalCount} terminals</div>
+                      <div className="mt-2 text-[10px] leading-6" style={{ color: 'var(--text-secondary)' }}>{swarmSession.workingDirectory}</div>
+                    </div>
+                    <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(4,9,18,0.52)' }}>
+                      <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Knowledge</div>
+                      <div className="mt-2 text-[13px] font-semibold" style={{ color: swarmSession.knowledgeFiles.length > 0 ? 'var(--success)' : 'var(--text-primary)' }}>{knowledgeLabel}</div>
+                      <div className="mt-2 text-[10px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+                        {swarmSession.knowledgeFiles.slice(0, 3).join(' · ') || 'No extra files linked to the mission yet.'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 space-y-4">
+                  {briefingSections.map((section) => (
+                    <article key={section.title} className="swarm-panel-soft p-6 md:p-7">
+                      <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--accent)' }}>{section.eyebrow}</div>
+                      <h3 className="mt-3 text-[24px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                        {section.title}
+                      </h3>
+                      <p className="mt-3 text-[12px] leading-7" style={{ color: 'var(--text-secondary)' }}>
+                        {section.body}
+                      </p>
+                      <div className="mt-4 grid gap-2">
+                        {section.bullets.map((bullet) => (
+                          <div key={bullet} className="flex items-start gap-3 rounded-[18px] border px-4 py-3" style={{ borderColor: 'rgba(170,221,255,0.06)', background: 'rgba(4,9,18,0.48)' }}>
+                            <span className="mt-1 h-2 w-2 rounded-full shrink-0" style={{ background: 'var(--accent)' }} />
+                            <span className="text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{bullet}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            </div>
           )}
         </div>
 
@@ -763,7 +1034,7 @@ export function SwarmDashboard() {
                 compact
               />
             </div>
-            {mode === 'mission' && (
+            {mode !== 'console' && (
               <div className="mt-3 flex items-center gap-2">
                 <div className="flex items-center gap-1 text-[8px] shrink-0" style={{ color: 'var(--text-muted)' }}>
                   <span>TO:</span>
@@ -848,7 +1119,7 @@ export function SwarmDashboard() {
       {/* ── Bottom status bar ── */}
       <div className="shrink-0 flex items-center justify-between px-4 py-1.5" style={{ borderTop: '1px solid var(--border)', background: 'rgba(0,0,0,0.15)' }}>
         <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
-          {agents.length} agents total · {messages.length} messages · {swarmSession.knowledgeFiles.length} knowledge files
+          {agents.length} visible agents · {messages.length} messages · {swarmSession.knowledgeFiles.length} knowledge files · {filterLabel}
         </span>
         <button onClick={() => setView('swarm-launch')} className="flex items-center gap-1.5 text-[10px] font-semibold transition-all hover:opacity-80" style={{ color: 'var(--accent)' }}>
           <UserPlus size={11} /> + Add Agent

@@ -1,20 +1,22 @@
 'use client'
 
+import Image from 'next/image'
 import { getDefaultWorkingDirectory, openFolderDialog } from '@/lib/desktop'
 import { useStore, AgentCli } from '@/store/useStore'
 import { useEffect, useState } from 'react'
 import { Zap, FolderOpen, Minus, Plus, Terminal, ArrowRight, Rocket, Bot, Check, Sparkles, Command, Layers3, Cpu } from 'lucide-react'
 
 const LAYOUTS = [
-  { count: 1, label: 'Solo' },
-  { count: 2, label: 'Dual' },
-  { count: 4, label: 'Quad' },
-  { count: 6, label: '6-Grid' },
-  { count: 8, label: '8-Grid' },
-  { count: 9, label: '9-Grid' },
-  { count: 12, label: '12-Grid' },
-  { count: 16, label: 'Max' },
-]
+  { count: 1, label: 'Single', cols: 1, rows: 1, title: 'Single Terminal', description: 'One terminal (default)' },
+  { count: 2, label: '2 Sessions', cols: 2, rows: 1, title: '2 Terminals', description: 'Side-by-side horizontal split' },
+  { count: 4, label: '4 Sessions', cols: 2, rows: 2, title: '4 Terminals', description: '2 × 2 execution grid' },
+  { count: 6, label: '6 Sessions', cols: 3, rows: 2, title: '6 Terminals', description: '3 × 2 execution grid' },
+  { count: 8, label: '8 Sessions', cols: 4, rows: 2, title: '8 Terminals', description: '4 × 2 execution grid' },
+  { count: 10, label: '10 Sessions', cols: 5, rows: 2, title: '10 Terminals', description: '5 × 2 execution grid' },
+  { count: 12, label: '12 Sessions', cols: 4, rows: 3, title: '12 Terminals', description: '4 × 3 execution grid' },
+  { count: 14, label: '14 Sessions', cols: 7, rows: 2, title: '14 Terminals', description: '7 × 2 execution grid' },
+  { count: 16, label: '16 Sessions', cols: 4, rows: 4, title: '16 Terminals', description: '4 × 4 execution grid' },
+] as const
 
 const AGENTS: { id: AgentCli; label: string; desc: string }[] = [
   { id: 'claude', label: 'Claude', desc: 'Anthropic' },
@@ -50,9 +52,40 @@ function StepBar({ step }: { step: number }) {
   )
 }
 
+function LayoutGlyph({ layout, active }: { layout: typeof LAYOUTS[number]; active: boolean }) {
+  const cellCount = Math.min(layout.count, layout.cols * layout.rows)
+  const width = Math.min(74, Math.max(38, layout.cols * 11))
+
+  return (
+    <div
+      className="grid gap-[3px]"
+      style={{
+        width,
+        gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
+        gridTemplateRows: `repeat(${layout.rows}, 8px)`,
+      }}
+    >
+      {Array.from({ length: cellCount }).map((_, index) => (
+        <div
+          key={`${layout.count}-${index}`}
+          className="rounded-[4px] transition-all"
+          style={{
+            background: active
+              ? 'linear-gradient(180deg, rgba(79,140,255,0.88), rgba(99,170,255,0.72))'
+              : 'rgba(255,255,255,0.12)',
+            boxShadow: active ? '0 0 14px rgba(79,140,255,0.18)' : 'none',
+            border: `1px solid ${active ? 'rgba(163,209,255,0.18)' : 'rgba(255,255,255,0.04)'}`,
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
 export function WorkspaceWizard() {
   const { setView, wizardStep, setWizardStep, wizardLayout, setWizardLayout, wizardAgentConfig, setWizardAgentConfig, launchWorkspace } = useStore()
   const [workDir, setWorkDir] = useState('')
+  const [pathJump, setPathJump] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -61,11 +94,13 @@ export function WorkspaceWizard() {
       .then((directory) => {
         if (mounted) {
           setWorkDir(directory)
+          setPathJump(directory)
         }
       })
       .catch(() => {
         if (mounted) {
           setWorkDir('C:\\')
+          setPathJump('C:\\')
         }
       })
 
@@ -76,7 +111,9 @@ export function WorkspaceWizard() {
 
   const totalAgents = Object.values(wizardAgentConfig).reduce((a, b) => a + b, 0)
   const pct = wizardLayout > 0 ? Math.round((totalAgents / wizardLayout) * 100) : 0
-  const previewColumns = Math.min(Math.max(wizardLayout, 1), 4)
+  const selectedLayout = LAYOUTS.find((layout) => layout.count === wizardLayout) ?? LAYOUTS[0]
+  const previewColumns = selectedLayout.cols
+  const previewRows = selectedLayout.rows
   const remainingSlots = Math.max(0, wizardLayout - totalAgents)
 
   if (wizardStep === 0) {
@@ -118,7 +155,7 @@ export function WorkspaceWizard() {
                 <div className="relative z-10">
                   <div className="mb-4 flex items-center justify-between">
                     <div className="h-12 w-12 overflow-hidden rounded-[18px] border border-white/10 shadow-[0_16px_40px_rgba(79,140,255,0.2)]">
-                      <img src="/LOGO.png" alt="SloerSpace" className="h-full w-full object-cover" />
+                      <Image src="/LOGO.png" alt="SloerSpace" width={48} height={48} className="h-full w-full object-cover" />
                     </div>
                     <div className="premium-kbd">Ctrl+T</div>
                   </div>
@@ -217,20 +254,20 @@ export function WorkspaceWizard() {
   if (wizardStep === 1) {
     return (
       <div className="h-full overflow-y-auto px-5 py-6 lg:px-7 lg:py-7">
-        <div className="grid gap-5 xl:grid-cols-[1.08fr_0.92fr] animate-fade-in-up opacity-0" style={{ animationFillMode: 'forwards' }}>
-          <div className="premium-panel-elevated p-6 md:p-8 xl:p-9">
+        <div className="mx-auto max-w-[1100px] premium-panel-elevated premium-card-shell p-6 md:p-8 xl:p-10 animate-fade-in-up opacity-0" style={{ animationFillMode: 'forwards' }}>
+          <div className="flex flex-col items-center text-center">
             <StepBar step={1} />
-            <div className="mt-6 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--text-muted)' }}>Step 02 · Layout & Path</div>
-            <h1 className="mt-3 text-3xl md:text-4xl text-hero" style={{ color: 'var(--text-primary)' }}>
-              Shape your
-              <br />
-              <span className="text-gradient">command canvas.</span>
+            <div className="mt-6 h-[3px] w-16 rounded-full gradient-accent" />
+            <h1 className="mt-5 text-3xl md:text-4xl text-hero" style={{ color: 'var(--text-primary)' }}>
+              Configure Layout
             </h1>
-            <p className="mt-4 max-w-2xl text-[14px] leading-8" style={{ color: 'var(--text-secondary)' }}>
-              Choose the exact terminal density and bind it to a real working directory. Your layout becomes the foundation of the workspace session.
+            <p className="mt-3 max-w-xl text-[14px] leading-7" style={{ color: 'var(--text-secondary)' }}>
+              Select a template and working directory.
             </p>
+          </div>
 
-            <div className="mt-8 space-y-5">
+          <div className="mt-10 grid gap-8 xl:grid-cols-[1.04fr_0.96fr]">
+            <div className="space-y-5">
               <div>
                 <div className="label">Working Directory</div>
                 <div className="premium-panel flex items-center gap-3 px-4 py-3">
@@ -245,118 +282,162 @@ export function WorkspaceWizard() {
                     style={{ color: 'var(--text-primary)' }}
                   />
                   <button
-                    className="btn-secondary text-[10px] px-3 py-2"
+                    className="btn-secondary text-[10px] px-4 py-2 uppercase tracking-[0.18em]"
                     onClick={() => {
                       void openFolderDialog(workDir || undefined).then((path) => {
-                        if (path) setWorkDir(path)
+                        if (path) {
+                          setWorkDir(path)
+                          setPathJump(path)
+                        }
                       })
                     }}
                   >
                     Browse
                   </button>
-                  <button
-                    className="btn-secondary text-[10px] px-3 py-2"
-                    onClick={() => { void getDefaultWorkingDirectory().then(setWorkDir) }}
-                  >
-                    Default
-                  </button>
                 </div>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-                <div className="premium-panel p-5">
-                  <div className="mb-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Live Preview</div>
-                      <div className="mt-1 text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>Workspace grid</div>
-                    </div>
-                    <div className="premium-kbd">{wizardLayout}</div>
-                  </div>
+              <div className="premium-panel overflow-hidden">
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <span className="text-[11px] font-mono font-semibold" style={{ color: 'var(--accent)' }}>~ $</span>
+                  <input
+                    type="text"
+                    value={pathJump}
+                    onChange={(e) => setPathJump(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && pathJump.trim()) {
+                        setWorkDir(pathJump.trim())
+                      }
+                    }}
+                    placeholder="cd ~/projects/my-app or ../repo"
+                    className="flex-1 bg-transparent text-[12px] outline-none font-mono placeholder:opacity-40"
+                    style={{ color: 'var(--text-primary)' }}
+                  />
+                  <button
+                    className="rounded-[12px] px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] transition-all"
+                    style={{
+                      background: pathJump.trim() ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.03)',
+                      color: pathJump.trim() ? 'var(--text-primary)' : 'var(--text-muted)',
+                    }}
+                    onClick={() => {
+                      if (pathJump.trim()) {
+                        setWorkDir(pathJump.trim())
+                      }
+                    }}
+                  >
+                    Go
+                  </button>
+                </div>
+                <div className="px-4 pb-4 text-[9px] font-bold uppercase tracking-[0.2em]" style={{ color: 'var(--text-muted)' }}>
+                  Use the browser above or jump with terminal-style navigation commands.
+                </div>
+              </div>
 
-                  <div className="rounded-[24px] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(6,10,18,0.96),rgba(4,8,14,0.98))] p-4">
-                    <div className="grid gap-2" style={{
-                      gridTemplateColumns: `repeat(${previewColumns}, minmax(0, 1fr))`,
-                      gridTemplateRows: `repeat(${Math.ceil(wizardLayout / previewColumns)}, 56px)`,
-                    }}>
-                      {Array.from({ length: wizardLayout }).map((_, i) => (
+              <div className="premium-panel p-5">
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                  <div className="rounded-[24px] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(6,10,18,0.96),rgba(4,8,14,0.98))] p-4 sm:min-w-[180px]">
+                    <div
+                      className="grid gap-2"
+                      style={{
+                        gridTemplateColumns: `repeat(${previewColumns}, minmax(0, 1fr))`,
+                        gridTemplateRows: `repeat(${previewRows}, 38px)`,
+                      }}
+                    >
+                      {Array.from({ length: wizardLayout }).map((_, index) => (
                         <div
-                          key={i}
-                          className="rounded-[18px] border border-[rgba(163,209,255,0.14)]"
+                          key={index}
+                          className="rounded-[14px] border border-[rgba(163,209,255,0.14)]"
                           style={{
-                            background: `linear-gradient(180deg, rgba(79,140,255,${0.16 + (i * 0.015)}), rgba(40,231,197,0.05))`,
+                            background: `linear-gradient(180deg, rgba(79,140,255,${0.16 + (index * 0.015)}), rgba(40,231,197,0.06))`,
                             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
                           }}
                         />
                       ))}
                     </div>
                   </div>
+
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Selected Template</div>
+                    <div className="mt-2 text-[22px] font-semibold tracking-[-0.04em]" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                      {selectedLayout.title}
+                    </div>
+                    <div className="mt-2 text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+                      {selectedLayout.description}
+                    </div>
+                    <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: 'var(--accent)' }}>
+                      <Layers3 size={11} />
+                      {wizardLayout} active sessions
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-5">
+              <div>
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Layout Templates</div>
+                    <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Select density</div>
+                  </div>
+                  <div className="premium-chip">
+                    <Layers3 size={12} style={{ color: 'var(--accent)' }} />
+                    Precision Grid
+                  </div>
                 </div>
 
-                <div className="premium-panel p-5">
-                  <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Launch Summary</div>
-                  <div className="space-y-3">
-                    <div className="premium-stat px-4 py-4">
-                      <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Pane Count</div>
-                      <div className="mt-2 text-3xl font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>{wizardLayout}</div>
-                    </div>
-                    <div className="premium-stat px-4 py-4">
-                      <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Directory</div>
-                      <div className="mt-2 break-all text-[11px] font-mono" style={{ color: 'var(--text-secondary)' }}>{workDir || 'Not set'}</div>
-                    </div>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                  {LAYOUTS.map((layout) => {
+                    const selected = wizardLayout === layout.count
+
+                    return (
+                      <button
+                        key={layout.count}
+                        onClick={() => setWizardLayout(layout.count)}
+                        className="rounded-[22px] p-4 text-center transition-all premium-interactive"
+                        style={{
+                          background: selected ? 'linear-gradient(180deg, rgba(79,140,255,0.16), rgba(40,231,197,0.08))' : 'rgba(9,15,24,0.72)',
+                          border: `1px solid ${selected ? 'rgba(79,140,255,0.36)' : 'var(--border)'}`,
+                          color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
+                          boxShadow: selected ? '0 18px 46px rgba(79,140,255,0.16)' : 'none',
+                        }}
+                      >
+                        <div className="mb-4 flex h-14 items-center justify-center rounded-[18px]" style={{ background: selected ? 'rgba(8,16,28,0.78)' : 'rgba(255,255,255,0.03)' }}>
+                          <LayoutGlyph layout={layout} active={selected} />
+                        </div>
+                        <div className="text-[10px] font-semibold">{layout.label}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="premium-panel p-5">
+                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Launch Summary</div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="premium-stat px-4 py-4">
+                    <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Pane Count</div>
+                    <div className="mt-2 text-3xl font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>{wizardLayout}</div>
+                  </div>
+                  <div className="premium-stat px-4 py-4">
+                    <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Directory</div>
+                    <div className="mt-2 break-all text-[11px] font-mono leading-6" style={{ color: 'var(--text-secondary)' }}>{workDir || 'Not set'}</div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="premium-panel p-6 md:p-7 xl:p-8">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Terminal Grid</div>
-                <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Select layout density</div>
-              </div>
-              <div className="premium-chip">
-                <Layers3 size={12} style={{ color: 'var(--accent)' }} />
-                Configurable
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-              {LAYOUTS.map((layout) => {
-                const sel = wizardLayout === layout.count
-
-                return (
-                  <button
-                    key={layout.count}
-                    onClick={() => setWizardLayout(layout.count)}
-                    className="rounded-[22px] p-4 text-center transition-all"
-                    style={{
-                      background: sel ? 'linear-gradient(180deg, rgba(79,140,255,0.16), rgba(40,231,197,0.08))' : 'rgba(9,15,24,0.72)',
-                      border: `1px solid ${sel ? 'rgba(163,209,255,0.22)' : 'var(--border)'}`,
-                      color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
-                      boxShadow: sel ? '0 18px 46px rgba(79,140,255,0.16)' : 'none',
-                    }}
-                  >
-                    <div className="text-2xl font-bold leading-none" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{layout.count}</div>
-                    <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em]">{layout.label}</div>
-                  </button>
-                )
-              })}
-            </div>
-
-            <div className="mt-6 rounded-[24px] border border-[var(--border)] bg-[rgba(9,15,24,0.72)] p-4">
-              <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Why layout matters</div>
-              <div className="mt-2 text-[12px] leading-7" style={{ color: 'var(--text-secondary)' }}>
-                Smaller grids maximize focus. Larger grids increase parallelism for coordinated execution and multi-agent workflows.
-              </div>
-            </div>
-
-            <div className="mt-6 flex items-center justify-between">
-              <button onClick={() => setWizardStep(0)} className="btn-ghost text-[11px] uppercase tracking-[0.14em]">Back</button>
-              <button onClick={() => setWizardStep(2)} className="btn-primary flex items-center gap-2" disabled={!workDir.trim()}>
-                Configure Agents <ArrowRight size={13} />
-              </button>
-            </div>
+          <div className="mt-10 flex items-center justify-between border-t border-[var(--border)] pt-6">
+            <button
+              onClick={() => { setWizardStep(0); setView('home') }}
+              className="btn-ghost text-[11px] uppercase tracking-[0.16em]"
+            >
+              Cancel
+            </button>
+            <button onClick={() => setWizardStep(2)} className="btn-primary flex items-center gap-2" disabled={!workDir.trim()}>
+              Configure Agents <ArrowRight size={13} />
+            </button>
           </div>
         </div>
       </div>

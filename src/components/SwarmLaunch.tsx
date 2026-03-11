@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, BookOpen, Bot, Check, Crown, FolderOpen, Hammer,
   MessageSquareText, Plus, Rocket, Search, Settings2, ShieldCheck, Sparkles,
-  Target, Upload, Workflow, X
+  Target, Upload, Workflow, X, ChevronDown, Cpu, Layers3, Terminal
 } from 'lucide-react'
 
 const SWARM_STEPS = [
@@ -42,6 +42,93 @@ const PRESET_OPTIONS = [
 ] as const
 
 const ROLE_ORDER: AgentRole[] = ['coord', 'builder', 'reviewer', 'scout', 'custom']
+
+const MISSION_TEMPLATES = [
+  {
+    label: 'Ship feature',
+    prompt: 'Plan and implement the requested feature end to end, split the work across specialists, validate regressions, and prepare the result for operator review.',
+  },
+  {
+    label: 'Forensic audit',
+    prompt: 'Audit the project for bugs, missing features, visual mismatches, and integration gaps, then coordinate fixes with clear review ownership.',
+  },
+  {
+    label: 'Release hardening',
+    prompt: 'Stabilize the codebase for release: verify critical flows, harden edge cases, reduce regressions, and route final QA through a dedicated reviewer lane.',
+  },
+  {
+    label: 'Deep refactor',
+    prompt: 'Refactor the target area with a clear execution plan, preserve behavior, improve maintainability, and require review sign-off before handoff.',
+  },
+] as const
+
+const SWARM_HERO_SIGNALS: Array<{ label: string; value: string; detail: string; icon: typeof Sparkles }> = [
+  { label: 'Mission graph', value: 'Shared execution map', detail: 'One objective, one roster, one control surface.', icon: Layers3 },
+  { label: 'Real runtime', value: 'Terminal-backed lanes', detail: 'Agents launch into real CLI sessions, not mock cards.', icon: Terminal },
+  { label: 'Operator control', value: 'Brief, route, review', detail: 'The operator can steer, audit, and stop the mission at any time.', icon: Cpu },
+] as const
+
+const SWARM_WORKFLOW_COLUMNS: Array<{ label: string; title: string; body: string; icon: typeof Sparkles }> = [
+  { label: 'Brief', title: 'Write one mission, not five disconnected prompts.', body: 'The whole swarm inherits the same objective, directory, and linked knowledge before execution starts.', icon: MessageSquareText },
+  { label: 'Compose', title: 'Specialists are assigned by role instead of improvising.', body: 'Coordinators, builders, scouts, reviewers, and custom lanes each get explicit responsibilities.', icon: Bot },
+  { label: 'Execute', title: 'Work moves in parallel with visible routing and handoffs.', body: 'The dashboard keeps execution and coordination synchronized while preserving operator visibility.', icon: Workflow },
+  { label: 'Review', title: 'Results come back through a review-aware delivery loop.', body: 'Reviewer lanes, live activity, and operator messaging reduce silent drift and missed regressions.', icon: ShieldCheck },
+] as const
+
+const SWARM_ADVANTAGES: Array<{ title: string; body: string; icon: typeof Sparkles }> = [
+  { title: 'One shared directory', body: 'Every agent boots with the same project root so execution never drifts into disconnected contexts.', icon: FolderOpen },
+  { title: 'Linked knowledge files', body: 'Screenshots, specs, logs, and notes stay attached to the mission instead of living outside the workflow.', icon: BookOpen },
+  { title: 'Clear role lanes', body: 'Specialized lanes create predictable handoffs between planning, implementation, research, and review.', icon: Crown },
+  { title: 'Live operator review', body: 'The operator can send directives, focus a lane, or stop the whole mission without losing session state.', icon: Sparkles },
+  { title: 'Real terminal surfaces', body: 'Swarm execution is tied to actual terminal panes, which keeps the system grounded in real command runtime.', icon: Terminal },
+  { title: 'Enterprise posture', body: 'The flow is optimized for shipping work with clarity, auditability, and less coordination overhead.', icon: Target },
+] as const
+
+const SWARM_FAQ = [
+  {
+    id: 'when',
+    question: 'When should I use SloerSwarm instead of a single terminal workspace?',
+    answer: 'Use Swarm when the work benefits from explicit coordination: implementation plus review, research plus execution, or larger missions that need parallel lanes with operator oversight.',
+  },
+  {
+    id: 'roles',
+    question: 'Do roles actually change how the mission behaves?',
+    answer: 'Yes. Roles shape task defaults, lane grouping, dashboard visualization, and the operator’s mental model of who is responsible for what inside the mission.',
+  },
+  {
+    id: 'knowledge',
+    question: 'What counts as supporting knowledge?',
+    answer: 'Specs, screenshots, bug reports, logs, release notes, and any files that should travel with the mission so every agent shares the same context.',
+  },
+  {
+    id: 'control',
+    question: 'Can I still intervene once the swarm is active?',
+    answer: 'Yes. The dashboard keeps operator messaging, lane focus, live activity, and stop controls available throughout the session.',
+  },
+] as const
+
+const SWARM_PLAYBOOK_SECTIONS = [
+  {
+    title: 'The problem with solo agents',
+    body: 'Single-agent loops often blur planning, implementation, research, and review into one stream. That works for quick tasks, but larger missions usually need clearer ownership and better visibility.',
+  },
+  {
+    title: 'One shared mission, one directory',
+    body: 'SloerSwarm starts from a single objective and a single working directory so the whole team works from the same operational source of truth.',
+  },
+  {
+    title: 'Specialized roles, not generic agents',
+    body: 'Coordination, build work, research, review, and custom duties can be assigned deliberately. That creates cleaner handoffs and a more senior-team execution pattern.',
+  },
+  {
+    title: 'Context files are part of the operating model',
+    body: 'Knowledge is not an afterthought. Screenshots, specs, and notes become mission inputs so every lane can operate with the same context envelope.',
+  },
+  {
+    title: 'Operator stays in control',
+    body: 'The operator can launch, direct, filter, review, and halt the swarm without losing situational awareness. The goal is leverage, not blind delegation.',
+  },
+] as const
 
 function getTaskTemplate(role: AgentRole, objective: string) {
   const mission = objective.trim() || 'the shared swarm objective'
@@ -127,7 +214,12 @@ export function SwarmLaunch() {
   const [presetSize, setPresetSize] = useState<number>(5)
   const [agents, setAgents] = useState<LaunchSwarmAgent[]>(() => buildAgentsFromPreset({ coord: 1, builder: 2, scout: 1, reviewer: 1, custom: 0 }, 'claude', ''))
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  const [isBrowsingDirectory, setIsBrowsingDirectory] = useState(false)
+  const [expandedFaqId, setExpandedFaqId] = useState<string | null>(SWARM_FAQ[0]?.id ?? null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const wizardRef = useRef<HTMLDivElement>(null)
+  const playbookRef = useRef<HTMLDivElement>(null)
+  const faqRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let mounted = true
@@ -195,6 +287,12 @@ export function SwarmLaunch() {
   const currentStep = SWARM_STEPS[step]
   const progressPercent = Math.round(((step + 1) / SWARM_STEPS.length) * 100)
   const readyToLaunch = swarmName.trim().length > 0 && objective.trim().length > 0 && workDir.trim().length > 0 && totalAgents > 0
+  const objectiveWordCount = objective.trim() ? objective.trim().split(/\s+/).filter(Boolean).length : 0
+  const directoryLeaf = workDir.split(/[\\/]/).filter(Boolean).pop() || workDir || 'Unbound'
+  const missionProfile = objective.trim().length > 480 ? 'Enterprise mission' : objective.trim().length > 180 ? 'Advanced mission' : objective.trim().length > 0 ? 'Focused mission' : 'Mission draft'
+  const knowledgeLabel = knowledgeFiles.length === 0 ? 'No linked files' : knowledgeFiles.length === 1 ? '1 linked file' : `${knowledgeFiles.length} linked files`
+  const activePreset = PRESET_OPTIONS.find((preset) => preset.total === presetSize) ?? null
+  const activeRoleCount = ROLE_OPTIONS.filter((role) => roleCounts[role.id] > 0).length
 
   const canContinue = [
     swarmName.trim().length > 0,
@@ -269,6 +367,32 @@ export function SwarmLaunch() {
     })
   }
 
+  const handleBrowseDirectory = async () => {
+    if (isBrowsingDirectory) return
+
+    setIsBrowsingDirectory(true)
+    try {
+      const path = await openFolderDialog(workDir || defaultDir || undefined)
+      if (path) {
+        setWorkDir(path)
+      }
+    } finally {
+      setIsBrowsingDirectory(false)
+    }
+  }
+
+  const scrollToSection = (ref: React.RefObject<HTMLDivElement>) => {
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const applyMissionTemplate = (template: (typeof MISSION_TEMPLATES)[number]) => {
+    setObjective(template.prompt)
+    setAgents((current) => current.map((agent) => ({
+      ...agent,
+      task: getTaskTemplate(agent.role, template.prompt),
+    })))
+  }
+
   const renderStepContent = () => {
     const StepIcon = currentStep.icon
 
@@ -334,6 +458,25 @@ export function SwarmLaunch() {
 
         {step === 1 && (
           <div className="mt-10 max-w-3xl mx-auto space-y-4">
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="premium-stat px-4 py-4">
+                <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Selected root</div>
+                <div className="mt-2 text-[13px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{directoryLeaf}</div>
+                <div className="mt-1 text-[10px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>{workDir || 'Awaiting path binding'}</div>
+              </div>
+              <div className="premium-stat px-4 py-4">
+                <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Home base</div>
+                <div className="mt-2 text-[13px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{defaultDir || 'Desktop bridge'}</div>
+                <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Fallback path for rapid setup</div>
+              </div>
+              <div className="premium-stat px-4 py-4">
+                <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Repository binding</div>
+                <div className="mt-2 text-[13px] font-semibold" style={{ color: workDir.trim() ? 'var(--success)' : 'var(--warning)' }}>
+                  {workDir.trim() ? 'Connected' : 'Pending'}
+                </div>
+                <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Agents inherit this path at launch</div>
+              </div>
+            </div>
             <div className="swarm-panel-soft swarm-hover-lift p-5 md:p-6">
               <div className="swarm-input-shell flex items-center gap-3 px-4 py-3.5">
                 <FolderOpen size={16} style={{ color: 'var(--accent)' }} />
@@ -344,14 +487,18 @@ export function SwarmLaunch() {
                   style={{ color: 'var(--text-primary)' }}
                 />
                 <button
-                  onClick={() => {
-                    void openFolderDialog(workDir || undefined).then((path) => {
-                      if (path) setWorkDir(path)
-                    })
-                  }}
+                  onClick={handleBrowseDirectory}
+                  disabled={isBrowsingDirectory}
                   className="btn-secondary text-[10px] px-4 py-2"
                 >
-                  Browse
+                  {isBrowsingDirectory ? 'Opening…' : 'Browse'}
+                </button>
+                <button
+                  onClick={() => defaultDir && setWorkDir(defaultDir)}
+                  disabled={!defaultDir}
+                  className="btn-secondary text-[10px] px-4 py-2"
+                >
+                  Default
                 </button>
               </div>
               <div className="mt-3 flex items-center gap-2 text-[9px] font-mono" style={{ color: 'var(--text-muted)' }}>
@@ -398,6 +545,22 @@ export function SwarmLaunch() {
         {step === 2 && (
           <div className="mt-10 max-w-4xl mx-auto">
             <div className="swarm-panel-soft p-6 md:p-8 lg:p-9">
+              <div className="mb-4 flex flex-wrap gap-2">
+                {MISSION_TEMPLATES.map((template) => (
+                  <button
+                    key={template.label}
+                    onClick={() => applyMissionTemplate(template)}
+                    className="rounded-full border px-3 py-1.5 text-[10px] font-semibold transition-all swarm-hover-lift"
+                    style={{
+                      borderColor: objective === template.prompt ? 'rgba(79,140,255,0.3)' : 'rgba(255,255,255,0.08)',
+                      background: objective === template.prompt ? 'rgba(79,140,255,0.1)' : 'rgba(4,9,18,0.56)',
+                      color: objective === template.prompt ? 'var(--accent)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {template.label}
+                  </button>
+                ))}
+              </div>
               <textarea
                 value={objective}
                 onChange={(e) => setObjective(e.target.value)}
@@ -474,6 +637,25 @@ export function SwarmLaunch() {
         {step === 4 && (
           <div className="mt-10 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
             <div className="swarm-panel-soft p-5 md:p-6">
+              <div className="mb-5 grid gap-3 md:grid-cols-3">
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Preset posture</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{activePreset ? activePreset.label : 'Custom roster'}</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{totalAgents} agents in formation</div>
+                </div>
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Coverage</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{activeRoleCount} active roles</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Balanced lanes reduce operator load</div>
+                </div>
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission sync</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: objective.trim() ? 'var(--success)' : 'var(--warning)' }}>
+                    {objective.trim() ? 'Aligned brief' : 'Awaiting brief'}
+                  </div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Tasks inherit the shared objective</div>
+                </div>
+              </div>
               <div className="text-[9px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: 'var(--text-muted)' }}>
                 Quick presets
               </div>
@@ -732,6 +914,148 @@ export function SwarmLaunch() {
     <div className="h-full flex flex-col overflow-hidden swarm-shell">
       <div className="flex-1 overflow-y-auto px-5 py-6 lg:px-7 lg:py-7 swarm-content">
         <div className="max-w-6xl mx-auto">
+          {step === 0 && (
+            <>
+              <section className="mb-8 grid gap-5 xl:grid-cols-[1.02fr_0.98fr]">
+                <div className="premium-panel-elevated premium-card-shell p-6 md:p-8 xl:p-10">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="premium-chip" style={{ color: 'var(--accent)' }}>
+                      <Workflow size={12} />
+                      SloerSwarm Command Surface
+                    </div>
+                    <div className="premium-chip">
+                      <Sparkles size={12} style={{ color: 'var(--warning)' }} />
+                      Multi-agent engineering system
+                    </div>
+                  </div>
+
+                  <h1 className="mt-6 text-[34px] font-bold leading-[1.02] md:text-[48px]" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '-0.05em' }}>
+                    Turn AI agents into
+                    <br />
+                    a senior engineering team.
+                  </h1>
+
+                  <p className="mt-4 max-w-2xl text-[14px] leading-8" style={{ color: 'var(--text-secondary)' }}>
+                    SloerSwarm gives you the launchpad, shared mission brief, specialist roster, and live command surface required to coordinate real delivery across parallel agent lanes.
+                  </p>
+
+                  <div className="mt-6 flex flex-wrap gap-3">
+                    <button
+                      onClick={() => scrollToSection(wizardRef)}
+                      className="btn-primary inline-flex items-center gap-2"
+                    >
+                      Configure Swarm <ArrowRight size={14} />
+                    </button>
+                    <button
+                      onClick={() => scrollToSection(playbookRef)}
+                      className="btn-secondary inline-flex items-center gap-2"
+                    >
+                      Read Playbook <BookOpen size={13} />
+                    </button>
+                    <button
+                      onClick={() => scrollToSection(faqRef)}
+                      className="btn-ghost inline-flex items-center gap-2 text-[11px]"
+                    >
+                      FAQ <ChevronDown size={12} />
+                    </button>
+                  </div>
+
+                  <div className="mt-8 grid gap-3 md:grid-cols-3">
+                    {SWARM_HERO_SIGNALS.map((signal) => {
+                      const SignalIcon = signal.icon
+
+                      return (
+                        <div key={signal.label} className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(4,9,18,0.56)' }}>
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
+                              <SignalIcon size={14} />
+                            </div>
+                            <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>{signal.label}</div>
+                          </div>
+                          <div className="mt-4 text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>{signal.value}</div>
+                          <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{signal.detail}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="swarm-panel-soft p-5 md:p-6 xl:p-7">
+                  <div className="rounded-[28px] border p-5" style={{ borderColor: 'rgba(79,140,255,0.14)', background: 'radial-gradient(circle at top, rgba(12,22,36,0.94), rgba(4,8,14,0.98))' }}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Bridge view</div>
+                        <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Live swarm topology</div>
+                      </div>
+                      <div className="premium-chip" style={{ color: 'var(--accent)' }}>
+                        <Terminal size={11} />
+                        Real CLI
+                      </div>
+                    </div>
+
+                    <div className="mt-5 rounded-[24px] border p-4" style={{ borderColor: 'rgba(79,140,255,0.12)', background: 'rgba(2,7,14,0.82)' }}>
+                      <div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--accent)' }}>
+                        <span className="h-2 w-2 rounded-full animate-pulse" style={{ background: 'var(--accent)' }} />
+                        Coordination layer
+                      </div>
+                      <div className="mt-4 grid gap-3">
+                        <div className="flex items-center justify-between rounded-[18px] border px-4 py-3" style={{ borderColor: 'rgba(79,140,255,0.18)', background: 'rgba(79,140,255,0.08)' }}>
+                          <div>
+                            <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Coordinator</div>
+                            <div className="mt-1 text-[9px] font-mono" style={{ color: 'var(--text-secondary)' }}>Routes tasks · maintains shared objective</div>
+                          </div>
+                          <span className="rounded-full px-2 py-1 text-[8px] font-bold uppercase" style={{ background: 'rgba(40,231,197,0.14)', color: 'var(--secondary)' }}>Live</span>
+                        </div>
+
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {[
+                            { label: 'Builders', tone: 'var(--info)', detail: 'Implement features and fixes in parallel.' },
+                            { label: 'Scouts', tone: 'var(--secondary)', detail: 'Gather constraints, APIs, and file context.' },
+                            { label: 'Reviewers', tone: 'var(--warning)', detail: 'Verify correctness, regressions, and readiness.' },
+                            { label: 'Custom', tone: 'var(--text-secondary)', detail: 'Handle bespoke operator-defined responsibilities.' },
+                          ].map((item) => (
+                            <div key={item.label} className="rounded-[18px] border px-4 py-3" style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(8,13,22,0.92)' }}>
+                              <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: item.tone }}>{item.label}</div>
+                              <div className="mt-2 text-[10px] leading-5" style={{ color: 'var(--text-secondary)' }}>{item.detail}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between rounded-[20px] border px-4 py-3" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(5,10,18,0.66)' }}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator loop</div>
+                        <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>Brief once, watch execution, then intervene only where it matters.</div>
+                      </div>
+                      <span className="text-[9px] font-mono" style={{ color: 'var(--accent)' }}>mission &gt; review</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="mb-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {SWARM_WORKFLOW_COLUMNS.map((item) => {
+                  const ItemIcon = item.icon
+
+                  return (
+                    <div key={item.label} className="swarm-panel-soft p-5">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
+                          <ItemIcon size={15} />
+                        </div>
+                        <div className="text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>{item.label}</div>
+                      </div>
+                      <div className="mt-4 text-[15px] font-semibold" style={{ color: 'var(--text-primary)' }}>{item.title}</div>
+                      <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{item.body}</div>
+                    </div>
+                  )
+                })}
+              </section>
+            </>
+          )}
+
+          <div ref={wizardRef}>
           <div className="mb-10 flex flex-wrap items-center justify-center gap-2 md:gap-3">
             {SWARM_STEPS.map((item, index) => {
               const complete = index < step
@@ -762,7 +1086,145 @@ export function SwarmLaunch() {
             })}
           </div>
 
+          <div className="mb-6 grid gap-3 lg:grid-cols-4">
+            <div className="premium-stat px-4 py-4">
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission profile</div>
+              <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{missionProfile}</div>
+              <div className="mt-1 text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{objectiveWordCount} words in brief</div>
+            </div>
+            <div className="premium-stat px-4 py-4">
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Bound root</div>
+              <div className="mt-2 text-[13px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{directoryLeaf}</div>
+              <div className="mt-1 text-[10px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>{workDir || 'Awaiting directory'}</div>
+            </div>
+            <div className="premium-stat px-4 py-4">
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Shared knowledge</div>
+              <div className="mt-2 text-[13px] font-semibold" style={{ color: knowledgeFiles.length > 0 ? 'var(--success)' : 'var(--text-primary)' }}>{knowledgeLabel}</div>
+              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Specs, logs, screenshots, and references</div>
+            </div>
+            <div className="premium-stat px-4 py-4">
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Fleet posture</div>
+              <div className="mt-2 text-[13px] font-semibold" style={{ color: readyToLaunch ? 'var(--success)' : 'var(--warning)' }}>
+                {readyToLaunch ? 'Launch-ready' : 'Configuring'}
+              </div>
+              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{activePreset ? `${activePreset.label} preset selected` : 'Custom roster in progress'}</div>
+            </div>
+          </div>
+
           {renderStepContent()}
+          </div>
+
+          {step === 0 && (
+            <>
+              <section className="mt-12">
+                <div className="mb-5 text-center">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>Role lanes</div>
+                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                    Specialist roles that keep the swarm shipping.
+                  </h2>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  {ROLE_OPTIONS.map((role) => {
+                    const RoleIcon = role.icon
+
+                    return (
+                      <div key={role.id} className="swarm-panel-soft p-5">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-2xl" style={{ background: `${role.color}18`, color: role.color }}>
+                          <RoleIcon size={16} />
+                        </div>
+                        <div className="mt-4 text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>{role.label}</div>
+                        <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{role.description}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+
+              <section className="mt-12">
+                <div className="mb-5 text-center">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>Why it stands out</div>
+                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                    Enterprise-grade swarm features that close the gaps.
+                  </h2>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {SWARM_ADVANTAGES.map((item) => {
+                    const ItemIcon = item.icon
+
+                    return (
+                      <div key={item.title} className="swarm-panel-soft p-5">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
+                          <ItemIcon size={15} />
+                        </div>
+                        <div className="mt-4 text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>{item.title}</div>
+                        <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{item.body}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+
+              <section ref={playbookRef} className="mt-12">
+                <div className="mb-5 text-center">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>Playbook</div>
+                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                    How SloerSwarm turns AI agents into an engineering team.
+                  </h2>
+                </div>
+                <div className="mx-auto max-w-4xl space-y-4">
+                  {SWARM_PLAYBOOK_SECTIONS.map((section) => (
+                    <article key={section.title} className="swarm-panel-soft p-6 md:p-7">
+                      <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--accent)' }}>Operating note</div>
+                      <h3 className="mt-3 text-[22px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                        {section.title}
+                      </h3>
+                      <p className="mt-3 text-[12px] leading-7" style={{ color: 'var(--text-secondary)' }}>
+                        {section.body}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section ref={faqRef} className="mt-12">
+                <div className="mb-5 text-center">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>FAQ</div>
+                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                    SloerSwarm FAQ
+                  </h2>
+                </div>
+                <div className="mx-auto max-w-4xl space-y-3">
+                  {SWARM_FAQ.map((item) => {
+                    const open = expandedFaqId === item.id
+
+                    return (
+                      <div key={item.id} className="swarm-panel-soft overflow-hidden">
+                        <button
+                          onClick={() => setExpandedFaqId(open ? null : item.id)}
+                          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+                        >
+                          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{item.question}</span>
+                          <ChevronDown
+                            size={16}
+                            style={{
+                              color: open ? 'var(--accent)' : 'var(--text-muted)',
+                              transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+                              transition: 'transform 0.2s ease',
+                            }}
+                          />
+                        </button>
+                        {open && (
+                          <div className="px-5 pb-5 text-[12px] leading-7" style={{ color: 'var(--text-secondary)' }}>
+                            {item.answer}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+            </>
+          )}
         </div>
       </div>
 

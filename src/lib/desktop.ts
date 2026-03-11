@@ -145,6 +145,26 @@ export async function toggleDesktopWindowMaximize() {
   await appWindow.maximize()
 }
 
+export async function toggleDesktopWindowFullscreen() {
+  if (!isTauriApp()) {
+    return false
+  }
+
+  const appWindow = await tauriGetCurrentWindow()
+  const fullscreen = await appWindow.isFullscreen()
+  await appWindow.setFullscreen(!fullscreen)
+  return !fullscreen
+}
+
+export async function isDesktopWindowFullscreen() {
+  if (!isTauriApp()) {
+    return false
+  }
+
+  const appWindow = await tauriGetCurrentWindow()
+  return appWindow.isFullscreen()
+}
+
 export async function closeDesktopWindow() {
   if (!isTauriApp()) {
     return
@@ -160,15 +180,15 @@ export async function openFolderDialog(defaultPath?: string): Promise<string | n
   }
 
   try {
-    const result = await tauriInvoke<string | null>('plugin:dialog|open', {
-      directory: true,
-      multiple: false,
-      defaultPath: defaultPath || undefined,
-      title: 'Select Project Folder',
+    const result = await tauriInvoke<string | string[] | null>('plugin:dialog|open', {
+      options: {
+        directory: true,
+        multiple: false,
+        defaultPath: defaultPath || undefined,
+      },
     })
-    return result
+    return Array.isArray(result) ? (result[0] ?? null) : result
   } catch {
-    // Dialog plugin not available
     return null
   }
 }

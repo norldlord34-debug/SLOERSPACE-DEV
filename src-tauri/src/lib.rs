@@ -158,16 +158,78 @@ fn resolve_cd_target(command: &str, cwd: &Path) -> Option<Result<PathBuf, String
 }
 
 #[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+enum WindowsShell {
+    Pwsh,
+    PowerShell,
+    Cmd,
+}
+
+#[cfg(target_os = "windows")]
+static WINDOWS_SHELL: LazyLock<WindowsShell> = LazyLock::new(detect_windows_shell);
+
+#[cfg(target_os = "windows")]
+fn command_exists(program: &str) -> bool {
+    std::process::Command::new("where")
+        .arg(program)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn detect_windows_shell() -> WindowsShell {
+    if command_exists("pwsh.exe") || command_exists("pwsh") {
+        WindowsShell::Pwsh
+    } else if command_exists("powershell.exe") || command_exists("powershell") {
+        WindowsShell::PowerShell
+    } else {
+        WindowsShell::Cmd
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_shell_label() -> &'static str {
+    match *WINDOWS_SHELL {
+        WindowsShell::Pwsh => "PowerShell 7",
+        WindowsShell::PowerShell => "PowerShell",
+        WindowsShell::Cmd => "Command Prompt",
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn normalize_shell_command(command: &str) -> String {
     let trimmed = command.trim();
     let lowercase = trimmed.to_ascii_lowercase();
 
-    if lowercase == "ls" {
-        return "dir".to_string();
-    }
+    match *WINDOWS_SHELL {
+        WindowsShell::Cmd => {
+            if lowercase == "ls" {
+                return "dir".to_string();
+            }
 
-    if lowercase == "pwd" {
-        return "cd".to_string();
+            if lowercase == "pwd" {
+                return "cd".to_string();
+            }
+        }
+        WindowsShell::Pwsh | WindowsShell::PowerShell => {
+            if lowercase == "pwd" {
+                return "(Get-Location).Path".to_string();
+            }
+
+            if lowercase == "env" {
+                return "Get-ChildItem Env:".to_string();
+            }
+
+            if let Some(target) = trimmed.strip_prefix("open ").or_else(|| trimmed.strip_prefix("Open ")) {
+                let escaped = target.trim().replace('"', "`\"");
+                if !escaped.is_empty() {
+                    return format!("Invoke-Item \"{}\"", escaped);
+                }
+            }
+        }
     }
 
     trimmed.to_string()
@@ -185,8 +247,41 @@ fn get_default_workdir() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn spawn_shell(cmd: &str, cwd: &Path) -> Result<tokio::process::Child, String> {
-    tokio::process::Command::new("cmd")
-        .args(["/C", cmd])
+    let mut command = match *WINDOWS_SHELL {
+        WindowsShell::Pwsh => {
+            let mut process = tokio::process::Command::new("pwsh");
+            process.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                cmd,
+            ]);
+            process
+        }
+        WindowsShell::PowerShell => {
+            let mut process = tokio::process::Command::new("powershell");
+            process.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                cmd,
+            ]);
+            process
+        }
+        WindowsShell::Cmd => {
+            let mut process = tokio::process::Command::new("cmd");
+            process.args(["/C", cmd]);
+            process
+        }
+    };
+
+    command
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -451,7 +546,7 @@ async fn get_system_info() -> Result<SystemInfo, String> {
         .unwrap_or_else(|| "unknown".into());
 
     #[cfg(target_os = "windows")]
-    let shell = "PowerShell".to_string();
+    let shell = windows_shell_label().to_string();
     #[cfg(not(target_os = "windows"))]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".into());
 

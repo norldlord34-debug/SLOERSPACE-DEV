@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useStore } from '@/store/useStore'
 import { X, Check, Sparkles, Terminal, Bot, Key, Zap, Shield } from 'lucide-react'
 
@@ -40,7 +41,7 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           <div className="p-6 md:p-8" style={{ background: 'linear-gradient(180deg, rgba(8,13,22,0.98), rgba(5,9,16,0.99))' }}>
             <div className="flex items-center gap-3 mb-4">
               <div className="h-10 w-10 rounded-xl overflow-hidden ring-1 ring-white/10">
-                <img src="/LOGO.png" alt="SloerSpace" className="h-full w-full object-cover" />
+                <Image src="/LOGO.png" alt="SloerSpace" width={40} height={40} className="h-full w-full object-cover" />
               </div>
               <div className="text-[14px] font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>SloerSpace</div>
             </div>
