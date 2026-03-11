@@ -1,0 +1,5 @@
+[build]
+target-dir = "C:\\sloerspace-build\\target"
+
+[profile.release]
+incremental = false

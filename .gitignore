@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Next.js build
+.next/
+out/
+
+# Tauri build
+src-tauri/target/
+
+# Generated
+src-tauri/gen/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Misc
+*.log
+npm-debug.log*
