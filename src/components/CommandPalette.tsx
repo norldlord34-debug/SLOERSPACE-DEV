@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback } from 'react'
 import { useStore } from '@/store/useStore'
 import {
   Search, Terminal, Kanban, Bot, FileText, Settings, Zap, Home,
@@ -13,9 +14,14 @@ interface PaletteItem {
   description: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   icon: React.ComponentType<any>
-  category: 'navigation' | 'action' | 'workspace' | 'task' | 'agent' | 'prompt'
+  category: 'navigation' | 'action' | 'workspace' | 'task' | 'agent' | 'prompt' | 'command'
   action: () => void
   keywords: string[]
+}
+
+function buildCommandPaletteLabel(command: string) {
+  const compact = command.trim().replace(/\s+/g, ' ')
+  return compact.length > 42 ? `${compact.slice(0, 39)}...` : compact
 }
 
 export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
@@ -25,8 +31,23 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
   const listRef = useRef<HTMLDivElement>(null)
   const {
     setView, workspaceTabs, setActiveTab, kanbanTasks,
-    customAgents, prompts,
+    customAgents, prompts, commandSnippets, starredCommands, terminalSessions, primeTerminalCommand,
   } = useStore()
+
+  const openTerminalWithCommand = useCallback((command: string, preferredWorkspaceId?: string) => {
+    primeTerminalCommand(command)
+    const preferredTerminalTab = preferredWorkspaceId
+      ? workspaceTabs.find((tab) => tab.id === preferredWorkspaceId && tab.view === 'terminal')
+      : null
+    const firstTerminalTab = preferredTerminalTab ?? workspaceTabs.find((tab) => tab.view === 'terminal')
+    if (firstTerminalTab) {
+      setActiveTab(firstTerminalTab.id)
+      setView('terminal')
+    } else {
+      setView('workspace-wizard')
+    }
+    onClose()
+  }, [onClose, primeTerminalCommand, setActiveTab, setView, workspaceTabs])
 
   const items = useMemo<PaletteItem[]>(() => {
     const navItems: PaletteItem[] = [
@@ -42,6 +63,8 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
     const actionItems: PaletteItem[] = [
       { id: 'act-workspace', label: 'New Workspace', description: 'Create a new terminal workspace', icon: Terminal, category: 'action', action: () => { setView('workspace-wizard'); onClose() }, keywords: ['new', 'workspace', 'create', 'terminal'] },
       { id: 'act-swarm', label: 'New Swarm Session', description: 'Launch parallel agent execution', icon: Zap, category: 'action', action: () => { setView('swarm-launch'); onClose() }, keywords: ['new', 'swarm', 'launch'] },
+      { id: 'act-git-status', label: 'Prime Git Status', description: 'Open or create a terminal workflow for git status', icon: Terminal, category: 'action', action: () => openTerminalWithCommand('git status'), keywords: ['git', 'status', 'repo'] },
+      { id: 'act-run-tests', label: 'Prime Test Command', description: 'Queue a common test command in the terminal', icon: Terminal, category: 'action', action: () => openTerminalWithCommand('npm test'), keywords: ['test', 'jest', 'vitest', 'qa'] },
     ]
 
     const workspaceItems: PaletteItem[] = workspaceTabs.map((tab) => ({
@@ -84,8 +107,86 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
       keywords: [prompt.title.toLowerCase()],
     }))
 
-    return [...navItems, ...actionItems, ...workspaceItems, ...taskItems, ...agentItems, ...promptItems]
-  }, [setView, onClose, workspaceTabs, setActiveTab, kanbanTasks, customAgents, prompts])
+    const recentRuntimeEntries = Object.entries(terminalSessions)
+      .flatMap(([workspaceId, panes]) => {
+        const workspaceName = workspaceTabs.find((tab) => tab.id === workspaceId)?.name ?? 'Workspace'
+
+        return panes.flatMap((pane) => {
+          const sessionCommand = pane.runtimeSession?.lastCommand ? [pane.runtimeSession.lastCommand] : []
+          const commandHistory = pane.commandHistory ?? []
+          const candidateCommands = [...sessionCommand, ...commandHistory.filter((command) => command !== pane.runtimeSession?.lastCommand)]
+
+          return candidateCommands.slice(0, 4).map((command, index) => ({
+            workspaceId,
+            workspaceName,
+            paneLabel: pane.label || pane.agentCli || `Pane ${index + 1}`,
+            command,
+            updatedAtMs: (pane.runtimeSession?.updatedAtMs ?? 0) - index,
+            exitCode: pane.runtimeSession?.lastCommand === command ? pane.runtimeSession?.lastExitCode ?? null : null,
+            sessionKind: pane.runtimeSession?.sessionKind ?? pane.sessionKind ?? 'local',
+          }))
+        })
+      })
+      .sort((left, right) => right.updatedAtMs - left.updatedAtMs)
+
+    const recentRuntimeCommandItems: PaletteItem[] = []
+    const seenRecentCommands = new Set<string>()
+
+    for (const entry of recentRuntimeEntries) {
+      const normalizedCommand = entry.command.trim().toLowerCase()
+
+      if (!normalizedCommand || seenRecentCommands.has(normalizedCommand)) {
+        continue
+      }
+
+      seenRecentCommands.add(normalizedCommand)
+      recentRuntimeCommandItems.push({
+        id: `recent-runtime-${entry.workspaceId}-${normalizedCommand}`,
+        label: buildCommandPaletteLabel(entry.command),
+        description: `${entry.workspaceName} · ${entry.paneLabel} · ${entry.sessionKind}${entry.exitCode !== null ? ` · exit ${entry.exitCode}` : ''}`,
+        icon: Terminal,
+        category: 'command' as const,
+        action: () => openTerminalWithCommand(entry.command, entry.workspaceId),
+        keywords: [
+          entry.command.toLowerCase(),
+          entry.workspaceName.toLowerCase(),
+          entry.paneLabel.toLowerCase(),
+          entry.sessionKind.toLowerCase(),
+          'recent',
+          'runtime',
+          'session',
+          'replay',
+          'terminal',
+        ],
+      })
+
+      if (recentRuntimeCommandItems.length >= 12) {
+        break
+      }
+    }
+
+    const snippetItems: PaletteItem[] = commandSnippets.slice(0, 12).map((snippet) => ({
+      id: `snippet-${snippet.id}`,
+      label: snippet.name,
+      description: snippet.command,
+      icon: Terminal,
+      category: 'command' as const,
+      action: () => openTerminalWithCommand(snippet.command),
+      keywords: [snippet.name.toLowerCase(), snippet.command.toLowerCase(), 'workflow', 'snippet', 'terminal'],
+    }))
+
+    const favoriteCommandItems: PaletteItem[] = starredCommands.slice(0, 12).map((command) => ({
+      id: `favorite-${command}`,
+      label: buildCommandPaletteLabel(command),
+      description: 'Starred terminal command',
+      icon: Terminal,
+      category: 'command' as const,
+      action: () => openTerminalWithCommand(command),
+      keywords: [command.toLowerCase(), 'favorite', 'starred', 'terminal'],
+    }))
+
+    return [...navItems, ...actionItems, ...recentRuntimeCommandItems, ...favoriteCommandItems, ...snippetItems, ...workspaceItems, ...taskItems, ...agentItems, ...promptItems]
+  }, [setView, onClose, workspaceTabs, setActiveTab, kanbanTasks, customAgents, prompts, commandSnippets, starredCommands, terminalSessions, openTerminalWithCommand])
 
   const filtered = useMemo(() => {
     if (!query.trim()) return items.slice(0, 20)
@@ -138,6 +239,7 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
     task: 'Tasks',
     agent: 'Agents',
     prompt: 'Prompts',
+    command: 'Command Flows',
   }
 
   let lastCategory = ''

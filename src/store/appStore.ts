@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
+import type { TerminalSessionSnapshot } from '@/lib/desktop'
 
 export type ThemeId =
   | 'sloerspace' | 'github-dark' | 'catppuccin-mocha' | 'rose-pine' | 'one-dark-pro'
@@ -29,11 +30,14 @@ export interface CustomThemePreset {
 export type ViewId = 'home' | 'terminal' | 'kanban' | 'agents' | 'prompts' | 'settings' | 'swarm-launch' | 'swarm-dashboard' | 'workspace-wizard' | 'login'
 export type WorkspaceViewId = Extract<ViewId, 'terminal' | 'swarm-dashboard'>
 export type WorkspaceKind = 'terminal' | 'swarm'
+export type TerminalSplitDirection = 'horizontal' | 'vertical'
 
 export type SettingsTab = 'appearance' | 'shortcuts' | 'ai-agents' | 'account' | 'api-keys' | 'data'
 
 export type AgentCli = 'claude' | 'codex' | 'gemini' | 'opencode' | 'cursor'
 export type AgentRole = 'builder' | 'reviewer' | 'scout' | 'coord' | 'custom'
+export type TerminalShellKind = 'auto' | 'powershell' | 'command-prompt' | 'git-bash'
+export type TerminalSessionKind = 'local' | 'agent-attached'
 
 export interface WorkspaceTab {
   id: string
@@ -41,6 +45,7 @@ export interface WorkspaceTab {
   color: string
   view: WorkspaceViewId
   kind: WorkspaceKind
+  splitDirection?: TerminalSplitDirection
   paneCount: number
   isActive: boolean
   workingDirectory: string
@@ -87,11 +92,17 @@ export interface TerminalPane {
   cwd: string
   commands: CommandBlock[]
   agentCli?: AgentCli
+  sessionKind?: TerminalSessionKind
+  shellKind?: TerminalShellKind
+  shellBootstrapCommand?: string | null
+  bootstrappedShellSessionCreatedAtMs?: number | null
   isActive: boolean
   label?: string
   isRunning?: boolean
   commandHistory?: string[]
   isLocked?: boolean
+  runtimeSessionId?: string
+  runtimeSession?: TerminalSessionSnapshot | null
 }
 
 export interface SwarmAgent {
@@ -99,6 +110,8 @@ export interface SwarmAgent {
   name: string
   role: AgentRole
   cli: AgentCli
+  cliBootstrapCommand?: string | null
+  terminalPaneId?: string
   status: 'idle' | 'running' | 'complete' | 'error'
   task: string
   output?: string
@@ -124,6 +137,7 @@ export interface LaunchSwarmAgent {
   id: string
   role: AgentRole
   cli: AgentCli
+  cliBootstrapCommand?: string | null
   task: string
   autoApprove: boolean
 }
@@ -137,11 +151,14 @@ export interface SwarmSession {
   status: 'idle' | 'active' | 'complete'
   startedAt: string | null
   knowledgeFiles: string[]
+  contextNotes: string
+  missionDirectives: string[]
   messages: SwarmMessage[]
 }
 
 export interface LaunchWorkspacePayload {
   agentConfig?: Record<AgentCli, number>
+  agentBootstrapCommands?: Partial<Record<AgentCli, string | null>>
   name?: string
   workingDirectory: string
 }
@@ -151,6 +168,8 @@ export interface LaunchSwarmPayload {
   objective: string
   workingDirectory: string
   knowledgeFiles: string[]
+  contextNotes: string
+  missionDirectives: string[]
   agents: LaunchSwarmAgent[]
 }
 
@@ -181,7 +200,9 @@ export interface AppState {
   sessionDevice: string | null
   trialStartedAt: string | null
   showOnStartup: boolean
+  hasCompletedOnboarding: boolean
   recentProjects: string[]
+  pendingTerminalCommand: string | null
   commandAliases: Record<string, string>
   starredCommands: string[]
   commandSnippets: Array<{ id: string; name: string; command: string }>
@@ -206,9 +227,12 @@ export interface AppState {
   setPaneWorkingDirectory: (paneId: string, cwd: string) => void
   clearPaneCommands: (paneId: string) => void
   removePane: (paneId: string) => void
+  setActivePane: (paneId: string) => void
+  markPaneShellBootstrapped: (paneId: string, sessionCreatedAtMs: number | null) => void
   renamePane: (paneId: string, label: string) => void
   setPaneRunning: (paneId: string, running: boolean) => void
   setPaneLocked: (paneId: string, locked: boolean) => void
+  setPaneRuntimeSession: (paneId: string, snapshot: TerminalSessionSnapshot | null) => void
   addToCommandHistory: (paneId: string, command: string) => void
   setCommandAliases: (aliases: Record<string, string>) => void
   toggleStarCommand: (command: string) => void
@@ -218,7 +242,10 @@ export interface AppState {
   setWizardStep: (step: number) => void
   setWizardLayout: (layout: number) => void
   setWizardAgentConfig: (config: Record<AgentCli, number>) => void
+  setActiveWorkspaceSplitDirection: (direction: TerminalSplitDirection) => void
   launchWorkspace: (payload: LaunchWorkspacePayload) => void
+  launchQuickShellWorkspace: (payload: { workingDirectory?: string; shellKind?: TerminalShellKind; name?: string; shellBootstrapCommand?: string | null }) => void
+  addPaneToActiveWorkspace: (payload?: { shellKind?: TerminalShellKind; label?: string; splitDirection?: TerminalSplitDirection; shellBootstrapCommand?: string | null }) => string | null
   launchSwarm: (payload: LaunchSwarmPayload) => void
   stopSwarm: () => void
   sendSwarmMessage: (target: 'all' | string, content: string) => void
@@ -229,7 +256,10 @@ export interface AppState {
   startTrial: () => void
   updateProfile: (updates: Partial<AppState['userProfile']>) => void
   setShowOnStartup: (show: boolean) => void
+  setOnboardingCompleted: (completed: boolean) => void
   addRecentProject: (path: string) => void
+  primeTerminalCommand: (command: string | null) => void
+  consumePendingTerminalCommand: () => string | null
   isPro: () => boolean
   isTrialActive: () => boolean
 }
@@ -239,7 +269,7 @@ const INITIAL_AGENT_CONFIG: Record<AgentCli, number> = { claude: 0, codex: 0, ge
 const INITIAL_USER_PROFILE = {
   username: 'developer',
   email: 'dev@sloerspace.dev',
-  plan: 'pro' as const,
+  plan: 'free' as const,
   accountId: 'local-workstation',
 }
 
@@ -260,7 +290,10 @@ const VIEW_IDS: ViewId[] = ['home', 'terminal', 'kanban', 'agents', 'prompts', '
 const SETTINGS_TAB_IDS: SettingsTab[] = ['appearance', 'shortcuts', 'ai-agents', 'account', 'api-keys', 'data']
 const WORKSPACE_VIEW_IDS: WorkspaceViewId[] = ['terminal', 'swarm-dashboard']
 const WORKSPACE_KINDS: WorkspaceKind[] = ['terminal', 'swarm']
+const TERMINAL_SPLIT_DIRECTIONS: TerminalSplitDirection[] = ['horizontal', 'vertical']
 const AGENT_CLIS: AgentCli[] = ['claude', 'codex', 'gemini', 'opencode', 'cursor']
+const TERMINAL_SHELL_KINDS: TerminalShellKind[] = ['auto', 'powershell', 'command-prompt', 'git-bash']
+const TERMINAL_SESSION_KINDS: TerminalSessionKind[] = ['local', 'agent-attached']
 const AGENT_ROLES: AgentRole[] = ['builder', 'reviewer', 'scout', 'coord', 'custom']
 const KANBAN_COLUMNS: KanbanTask['column'][] = ['todo', 'in-progress', 'in-review', 'complete', 'cancelled']
 const KANBAN_PRIORITIES: KanbanTask['priority'][] = ['low', 'medium', 'high', 'critical']
@@ -437,39 +470,90 @@ const updatePaneCollection = (
   return found ? nextSessions : sessions
 }
 
-const buildSwarmStarterCommand = (agentName: string, role: AgentRole): CommandBlock => ({
+const buildSwarmStarterCommand = (
+  agentName: string,
+  role: AgentRole,
+  cli: AgentCli,
+  task: string,
+  workingDirectory: string,
+): CommandBlock => ({
   id: generateId(),
-  command: `echo ${agentName} boot`,
-  output: `${agentName} online · role ${role}`,
+  command: `echo [SWARM] ${agentName} session ready`,
+  output: [
+    `${agentName} online`,
+    `role ${role} · cli ${cli}`,
+    `root ${workingDirectory}`,
+    task || 'Mission brief pending',
+  ].join('\n'),
   exitCode: 0,
   timestamp: new Date().toLocaleTimeString(),
   isCollapsed: false,
   duration: '0ms',
 })
 
+const createTerminalPane = (
+  workingDirectory: string,
+  options?: {
+    agentCli?: AgentCli
+    sessionKind?: TerminalSessionKind
+    label?: string
+    isActive?: boolean
+    commands?: CommandBlock[]
+    shellKind?: TerminalShellKind
+    shellBootstrapCommand?: string | null
+  },
+): TerminalPane => ({
+  id: generateId(),
+  cwd: workingDirectory,
+  commands: options?.commands ?? [],
+  agentCli: options?.agentCli,
+  sessionKind: options?.sessionKind ?? 'local',
+  shellKind: options?.shellKind ?? 'auto',
+  shellBootstrapCommand: options?.shellBootstrapCommand ?? null,
+  bootstrappedShellSessionCreatedAtMs: null,
+  isActive: options?.isActive ?? false,
+  label: options?.label,
+  isRunning: false,
+  commandHistory: [],
+  runtimeSessionId: generateId(),
+  runtimeSession: null,
+})
+
 const expandAgentAssignments = (config: Record<AgentCli, number>) => (
   Object.entries(config) as [AgentCli, number][]
 ).flatMap(([agent, count]) => Array.from({ length: count }, () => agent))
 
-const createTerminalPanes = (paneCount: number, workingDirectory: string, config: Record<AgentCli, number>) => {
+const createTerminalPanes = (
+  paneCount: number,
+  workingDirectory: string,
+  config: Record<AgentCli, number>,
+  shellKind: TerminalShellKind = 'auto',
+  bootstrapCommands?: Partial<Record<AgentCli, string | null>>,
+) => {
   const assignedAgents = expandAgentAssignments(config)
 
-  return Array.from({ length: paneCount }, (_, index): TerminalPane => ({
-    id: generateId(),
-    cwd: workingDirectory,
-    commands: [],
-    agentCli: assignedAgents[index],
-    isActive: index === 0,
-  }))
+  return Array.from({ length: paneCount }, (_, index): TerminalPane => {
+    const agentCli = assignedAgents[index]
+    const shellBootstrapCommand = agentCli && bootstrapCommands?.[agentCli] ? bootstrapCommands[agentCli] : null
+    return createTerminalPane(workingDirectory, {
+      agentCli,
+      sessionKind: 'local',
+      isActive: index === 0,
+      shellKind,
+      shellBootstrapCommand,
+    })
+  })
 }
 
 const createSwarmTerminalPanes = (agents: SwarmAgent[], workingDirectory: string) => (
-  agents.map((agent, index): TerminalPane => ({
-    id: generateId(),
-    cwd: workingDirectory,
-    commands: [buildSwarmStarterCommand(agent.name, agent.role)],
+  agents.map((agent, index): TerminalPane => createTerminalPane(workingDirectory, {
+    commands: [buildSwarmStarterCommand(agent.name, agent.role, agent.cli, agent.task, workingDirectory)],
     agentCli: agent.cli,
+    sessionKind: 'agent-attached',
+    label: agent.name,
     isActive: index === 0,
+    shellKind: 'auto',
+    shellBootstrapCommand: agent.cliBootstrapCommand ?? null,
   }))
 )
 
@@ -506,6 +590,7 @@ const createSwarmAgents = (launchAgents: LaunchSwarmAgent[], objective: string) 
       name: `${AGENT_LABELS[agent.cli]} ${agentCliCounts[agent.cli]}`,
       role,
       cli: agent.cli,
+      cliBootstrapCommand: agent.cliBootstrapCommand ?? null,
       status: 'running',
       task: agent.task.trim() || getSwarmTask(role, objective),
       runtime: '0m 00s',
@@ -517,7 +602,15 @@ const createSwarmAgents = (launchAgents: LaunchSwarmAgent[], objective: string) 
   })
 }
 
-const createSwarmMessages = (name: string, objective: string, agents: SwarmAgent[]): SwarmMessage[] => {
+const createSwarmMessages = (
+  name: string,
+  objective: string,
+  agents: SwarmAgent[],
+  workingDirectory: string,
+  knowledgeFiles: string[],
+  contextNotes: string,
+  missionDirectives: string[],
+): SwarmMessage[] => {
   const now = new Date().toISOString()
   const coordinator = agents.find((agent) => agent.role === 'coord') ?? agents[0]
 
@@ -532,13 +625,55 @@ const createSwarmMessages = (name: string, objective: string, agents: SwarmAgent
       createdAt: now,
       kind: 'status',
     },
+    {
+      id: generateId(),
+      senderId: 'system',
+      senderName: 'System',
+      senderRole: 'system',
+      target: 'all',
+      content: `Workspace root synchronized: ${workingDirectory}`,
+      createdAt: now,
+      kind: 'status',
+    },
+    {
+      id: generateId(),
+      senderId: 'system',
+      senderName: 'System',
+      senderRole: 'system',
+      target: 'all',
+      content: knowledgeFiles.length > 0
+        ? `Knowledge envelope attached with ${knowledgeFiles.length} linked file${knowledgeFiles.length === 1 ? '' : 's'}.`
+        : 'Knowledge envelope is empty. Launching with mission brief only.',
+      createdAt: now,
+      kind: 'status',
+    },
+    ...(missionDirectives.length > 0 ? [{
+      id: generateId(),
+      senderId: 'system',
+      senderName: 'System',
+      senderRole: 'system' as const,
+      target: 'all' as const,
+      content: `Mission directives active: ${missionDirectives.join(', ')}`,
+      createdAt: now,
+      kind: 'status' as const,
+    }] : []),
+    ...(contextNotes.trim() ? [{
+      id: generateId(),
+      senderId: 'system',
+      senderName: 'System',
+      senderRole: 'system' as const,
+      target: 'all' as const,
+      content: `Operator note linked to mission context: ${contextNotes.trim()}`,
+      createdAt: now,
+      kind: 'status' as const,
+    }] : []),
     ...(coordinator ? [{
       id: generateId(),
       senderId: coordinator.id,
       senderName: coordinator.name,
       senderRole: coordinator.role,
       target: 'all' as const,
-      content: 'Coordinator online. Routing tasks and booting CLI sessions.',
+      content: 'Coordinator online. Routing tasks, syncing lanes, and preparing operator-visible terminal sessions.',
       createdAt: now,
       kind: 'message' as const,
     }] : []),
@@ -576,12 +711,36 @@ const getBoolean = (value: unknown, fallback = false) => (
   typeof value === 'boolean' ? value : fallback
 )
 
+const getOptionalString = (value: unknown) => (
+  typeof value === 'string' ? value : null
+)
+
+const normalizeStringArray = (value: unknown, limit = 200) => (
+  Array.isArray(value)
+    ? value.flatMap((entry) => typeof entry === 'string' ? [entry] : []).slice(0, limit)
+    : []
+)
+
 const getEnumValue = <T extends string>(collection: readonly T[], value: unknown, fallback: T): T => (
   typeof value === 'string' && collection.includes(value as T) ? (value as T) : fallback
 )
 
 const getOptionalAgentCli = (value: unknown) => (
   typeof value === 'string' && AGENT_CLIS.includes(value as AgentCli) ? (value as AgentCli) : undefined
+)
+
+const getOptionalTerminalShellKind = (value: unknown) => (
+  typeof value === 'string' && TERMINAL_SHELL_KINDS.includes(value as TerminalShellKind) ? (value as TerminalShellKind) : undefined
+)
+
+const getOptionalTerminalSessionKind = (value: unknown) => (
+  typeof value === 'string' && TERMINAL_SESSION_KINDS.includes(value as TerminalSessionKind) ? (value as TerminalSessionKind) : undefined
+)
+
+const getOptionalTerminalSplitDirection = (value: unknown) => (
+  typeof value === 'string' && TERMINAL_SPLIT_DIRECTIONS.includes(value as TerminalSplitDirection)
+    ? (value as TerminalSplitDirection)
+    : undefined
 )
 
 const normalizeCommandBlocks = (value: unknown) => {
@@ -610,34 +769,86 @@ const normalizeCommandBlocks = (value: unknown) => {
   return blocks
 }
 
-const normalizeTerminalPane = (value: unknown, index: number) => {
+const normalizeTerminalSessionSnapshot = (value: unknown): TerminalSessionSnapshot | null => {
   if (!isRecord(value)) {
     return null
   }
+
+  const now = Date.now()
+
+  return {
+    sessionId: getString(value.sessionId) || generateId(),
+    label: getOptionalString(value.label),
+    sessionKind: getString(value.sessionKind) || 'local',
+    backendKind: getString(value.backendKind) || 'persistent-pty',
+    cwd: getString(value.cwd) || getFallbackWorkingDirectory(),
+    createdAtMs: Math.max(0, Math.trunc(getNumber(value.createdAtMs, now))),
+    updatedAtMs: Math.max(0, Math.trunc(getNumber(value.updatedAtMs, now))),
+    lastCommand: getOptionalString(value.lastCommand),
+    lastExitCode: typeof value.lastExitCode === 'number' ? Math.trunc(value.lastExitCode) : null,
+    lastDurationMs: typeof value.lastDurationMs === 'number' ? Math.max(0, Math.trunc(value.lastDurationMs)) : null,
+    executionCount: Math.max(0, Math.trunc(getNumber(value.executionCount, 0))),
+    isRunning: getBoolean(value.isRunning, false),
+    activeCommandId: getOptionalString(value.activeCommandId),
+    executionMode: getString(value.executionMode) || 'persistent-pty-shell',
+    shell: getString(value.shell) || 'Shell',
+  }
+}
+
+const normalizeTerminalPane = (
+  value: unknown,
+  index: number,
+  fallbackSessionKind: TerminalSessionKind = 'local',
+) => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const runtimeSession = normalizeTerminalSessionSnapshot(value.runtimeSession)
+  const sessionKind = getOptionalTerminalSessionKind(value.sessionKind)
+    ?? getOptionalTerminalSessionKind(runtimeSession?.sessionKind)
+    ?? fallbackSessionKind
 
   return {
     id: getString(value.id) || generateId(),
     cwd: getString(value.cwd) || getFallbackWorkingDirectory(),
     commands: normalizeCommandBlocks(value.commands),
     agentCli: getOptionalAgentCli(value.agentCli),
+    sessionKind,
+    shellKind: getOptionalTerminalShellKind(value.shellKind) ?? 'auto',
+    shellBootstrapCommand: getOptionalString(value.shellBootstrapCommand),
+    bootstrappedShellSessionCreatedAtMs: typeof value.bootstrappedShellSessionCreatedAtMs === 'number'
+      ? Math.max(0, Math.trunc(value.bootstrappedShellSessionCreatedAtMs))
+      : null,
     isActive: getBoolean(value.isActive, index === 0),
+    label: getString(value.label) || undefined,
+    isRunning: getBoolean(value.isRunning, false),
+    commandHistory: normalizeStringArray(value.commandHistory, 200),
+    isLocked: getBoolean(value.isLocked, false),
+    runtimeSessionId: getString(value.runtimeSessionId) || generateId(),
+    runtimeSession: runtimeSession ? { ...runtimeSession, sessionKind } : null,
   } satisfies TerminalPane
 }
 
-const normalizeTerminalSessions = (value: unknown) => {
+const normalizeTerminalSessions = (value: unknown, workspaceTabs: WorkspaceTab[]) => {
   if (!isRecord(value)) {
     return {}
   }
 
   const sessions: Record<string, TerminalPane[]> = {}
+  const workspaceKindById = new Map(workspaceTabs.map((tab) => [tab.id, tab.kind] as const))
 
   for (const [sessionId, panes] of Object.entries(value)) {
     if (!Array.isArray(panes)) {
       continue
     }
 
+     const fallbackSessionKind: TerminalSessionKind = workspaceKindById.get(sessionId) === 'swarm'
+      ? 'agent-attached'
+      : 'local'
+
     sessions[sessionId] = panes.flatMap((pane, index) => {
-      const normalizedPane = normalizeTerminalPane(pane, index)
+      const normalizedPane = normalizeTerminalPane(pane, index, fallbackSessionKind)
       return normalizedPane ? [normalizedPane] : []
     })
   }
@@ -668,6 +879,7 @@ const normalizeWorkspaceTabs = (value: unknown) => {
       color: getString(entry.color) || nextWorkspaceColor(index),
       view: getEnumValue(WORKSPACE_VIEW_IDS, entry.view, fallbackView),
       kind,
+      splitDirection: getOptionalTerminalSplitDirection(entry.splitDirection) ?? 'vertical',
       paneCount: Math.max(1, Math.trunc(getNumber(entry.paneCount, 1))),
       isActive: getBoolean(entry.isActive, false),
       workingDirectory: getString(entry.workingDirectory) || getFallbackWorkingDirectory(),
@@ -699,6 +911,8 @@ const normalizeSwarmAgents = (value: unknown, objective: string) => {
       name: getString(entry.name) || `${AGENT_LABELS[cli]} #${index + 1}`,
       role,
       cli,
+      cliBootstrapCommand: getOptionalString(entry.cliBootstrapCommand),
+      terminalPaneId: typeof entry.terminalPaneId === 'string' ? entry.terminalPaneId : undefined,
       status: getEnumValue(SWARM_AGENT_STATUSES, entry.status, 'idle'),
       task: getString(entry.task) || getSwarmTask(role, objective),
       output: typeof entry.output === 'string' ? entry.output : undefined,
@@ -770,6 +984,10 @@ const normalizeSwarmSessions = (value: unknown) => {
       status: getEnumValue(SWARM_SESSION_STATUSES, entry.status, 'idle'),
       startedAt: typeof entry.startedAt === 'string' || entry.startedAt === null ? entry.startedAt : null,
       knowledgeFiles: Array.isArray(entry.knowledgeFiles) ? entry.knowledgeFiles.flatMap((item) => typeof item === 'string' ? [item] : []) : [],
+      contextNotes: getString(entry.contextNotes),
+      missionDirectives: Array.isArray(entry.missionDirectives)
+        ? entry.missionDirectives.flatMap((item) => typeof item === 'string' ? [item] : [])
+        : [],
       messages: normalizeSwarmMessages(entry.messages),
     }
   }
@@ -867,6 +1085,43 @@ const normalizeAgentConfig = (value: unknown) => {
   return config
 }
 
+const normalizeCommandAliases = (value: unknown) => {
+  if (!isRecord(value)) {
+    return {}
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) => (
+      key.trim() && typeof entry === 'string' ? [[key, entry]] : []
+    )),
+  )
+}
+
+const normalizeCommandSnippets = (value: unknown) => {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.flatMap((entry, index) => {
+    if (!isRecord(entry)) {
+      return []
+    }
+
+    const name = getString(entry.name).trim()
+    const command = getString(entry.command).trim()
+
+    if (!name || !command) {
+      return []
+    }
+
+    return [{
+      id: getString(entry.id) || `snippet-${index}-${generateId()}`,
+      name,
+      command,
+    }]
+  }).slice(0, 200)
+}
+
 const normalizeUserProfile = (value: unknown) => {
   if (!isRecord(value)) {
     return { ...INITIAL_USER_PROFILE }
@@ -951,7 +1206,7 @@ const normalizePersistedState = (value: unknown): Partial<AppState> | null => {
     settingsTab: getEnumValue(SETTINGS_TAB_IDS, persistedState.settingsTab, 'appearance'),
     workspaceTabs: markActiveTabs(workspaceTabs, normalizedActiveTabId),
     activeTabId: normalizedActiveTabId,
-    terminalSessions: normalizeTerminalSessions(persistedState.terminalSessions),
+    terminalSessions: normalizeTerminalSessions(persistedState.terminalSessions, workspaceTabs),
     swarmSessions: normalizeSwarmSessions(persistedState.swarmSessions),
     kanbanTasks: normalizeKanbanTasks(persistedState.kanbanTasks),
     customAgents: normalizeCustomAgents(persistedState.customAgents),
@@ -960,6 +1215,18 @@ const normalizePersistedState = (value: unknown): Partial<AppState> | null => {
     wizardLayout: Math.min(16, Math.max(1, Math.trunc(getNumber(persistedState.wizardLayout, 1)))),
     wizardAgentConfig: normalizeAgentConfig(persistedState.wizardAgentConfig),
     userProfile: normalizeUserProfile(persistedState.userProfile),
+    isLoggedIn: getBoolean(persistedState.isLoggedIn, false),
+    authToken: getOptionalString(persistedState.authToken),
+    sessionDevice: getOptionalString(persistedState.sessionDevice),
+    trialStartedAt: getOptionalString(persistedState.trialStartedAt),
+    showOnStartup: getBoolean(persistedState.showOnStartup, true),
+    hasCompletedOnboarding: typeof persistedState.hasCompletedOnboarding === 'boolean'
+      ? persistedState.hasCompletedOnboarding
+      : true,
+    recentProjects: normalizeStringArray(persistedState.recentProjects, 10),
+    commandAliases: normalizeCommandAliases(persistedState.commandAliases),
+    starredCommands: normalizeStringArray(persistedState.starredCommands, 200),
+    commandSnippets: normalizeCommandSnippets(persistedState.commandSnippets),
   }
 }
 
@@ -986,7 +1253,9 @@ export const useStore = create<AppState>()(persist(
     sessionDevice: null,
     trialStartedAt: null,
     showOnStartup: true,
+    hasCompletedOnboarding: false,
     recentProjects: [],
+    pendingTerminalCommand: null,
     commandAliases: {},
     starredCommands: [],
     commandSnippets: [],
@@ -1081,6 +1350,13 @@ export const useStore = create<AppState>()(persist(
       terminalSessions: updatePaneCollection(state.terminalSessions, paneId, (pane) => ({
         ...pane,
         cwd,
+        runtimeSession: pane.runtimeSession
+          ? {
+            ...pane.runtimeSession,
+            cwd,
+            updatedAtMs: Date.now(),
+          }
+          : pane.runtimeSession,
       })),
     })),
 
@@ -1091,20 +1367,87 @@ export const useStore = create<AppState>()(persist(
       })),
     })),
 
+    setActivePane: (paneId) => set((state) => {
+      let changed = false
+
+      const nextSessions = Object.fromEntries(
+        Object.entries(state.terminalSessions).map(([sessionId, panes]) => {
+          const hasTarget = panes.some((pane) => pane.id === paneId)
+
+          if (!hasTarget) {
+            return [sessionId, panes]
+          }
+
+          changed = true
+          return [sessionId, panes.map((pane) => ({
+            ...pane,
+            isActive: pane.id === paneId,
+          }))]
+        }),
+      ) as Record<string, TerminalPane[]>
+
+      return changed ? { terminalSessions: nextSessions } : state
+    }),
+
+    markPaneShellBootstrapped: (paneId, sessionCreatedAtMs) => set((state) => ({
+      terminalSessions: updatePaneCollection(state.terminalSessions, paneId, (pane) => ({
+        ...pane,
+        bootstrappedShellSessionCreatedAtMs: sessionCreatedAtMs,
+      })),
+    })),
+
     removePane: (paneId) => set((state) => {
-      const next: Record<string, TerminalPane[]> = {}
-      for (const [sid, panes] of Object.entries(state.terminalSessions)) {
-        const filtered = panes.filter((p) => p.id !== paneId)
-        if (filtered.length > 0) next[sid] = filtered
-        else next[sid] = panes
+      const nextSessions: Record<string, TerminalPane[]> = { ...state.terminalSessions }
+      let targetWorkspaceId: string | null = null
+
+      for (const [sessionId, panes] of Object.entries(state.terminalSessions)) {
+        const paneIndex = panes.findIndex((pane) => pane.id === paneId)
+        if (paneIndex === -1) {
+          continue
+        }
+
+        if (panes.length <= 1) {
+          return state
+        }
+
+        targetWorkspaceId = sessionId
+        const filtered = panes.filter((pane) => pane.id !== paneId)
+        const removedActive = panes[paneIndex]?.isActive
+
+        nextSessions[sessionId] = filtered.map((pane, index) => ({
+          ...pane,
+          isActive: removedActive
+            ? index === Math.max(0, Math.min(paneIndex - 1, filtered.length - 1))
+            : pane.isActive,
+        }))
+        break
       }
-      return { terminalSessions: next }
+
+      if (!targetWorkspaceId) {
+        return state
+      }
+
+      return {
+        terminalSessions: nextSessions,
+        workspaceTabs: state.workspaceTabs.map((tab) => (
+          tab.id === targetWorkspaceId
+            ? { ...tab, paneCount: nextSessions[targetWorkspaceId]?.length ?? tab.paneCount }
+            : tab
+        )),
+      }
     }),
 
     renamePane: (paneId, label) => set((state) => ({
       terminalSessions: updatePaneCollection(state.terminalSessions, paneId, (pane) => ({
         ...pane,
         label,
+        runtimeSession: pane.runtimeSession
+          ? {
+            ...pane.runtimeSession,
+            label,
+            updatedAtMs: Date.now(),
+          }
+          : pane.runtimeSession,
       })),
     })),
 
@@ -1112,6 +1455,13 @@ export const useStore = create<AppState>()(persist(
       terminalSessions: updatePaneCollection(state.terminalSessions, paneId, (pane) => ({
         ...pane,
         isRunning: running,
+        runtimeSession: pane.runtimeSession
+          ? {
+            ...pane.runtimeSession,
+            isRunning: running,
+            updatedAtMs: Date.now(),
+          }
+          : pane.runtimeSession,
       })),
     })),
 
@@ -1122,10 +1472,19 @@ export const useStore = create<AppState>()(persist(
       })),
     })),
 
+    setPaneRuntimeSession: (paneId, snapshot) => set((state) => ({
+      terminalSessions: updatePaneCollection(state.terminalSessions, paneId, (pane) => ({
+        ...pane,
+        cwd: snapshot?.cwd ?? pane.cwd,
+        runtimeSessionId: snapshot?.sessionId ?? pane.runtimeSessionId ?? generateId(),
+        runtimeSession: snapshot,
+      })),
+    })),
+
     addToCommandHistory: (paneId, command) => set((state) => ({
       terminalSessions: updatePaneCollection(state.terminalSessions, paneId, (pane) => ({
         ...pane,
-        commandHistory: [command, ...(pane.commandHistory ?? []).filter((c) => c !== command)].slice(0, 200),
+        commandHistory: [command, ...(pane.commandHistory ?? []).filter((entry) => entry !== command)].slice(0, 200),
       })),
     })),
 
@@ -1152,6 +1511,19 @@ export const useStore = create<AppState>()(persist(
     setWizardStep: (step) => set({ wizardStep: step }),
     setWizardLayout: (layout) => set({ wizardLayout: layout }),
     setWizardAgentConfig: (config) => set({ wizardAgentConfig: config }),
+    setActiveWorkspaceSplitDirection: (direction) => set((state) => {
+      if (!state.activeTabId) {
+        return state
+      }
+
+      return {
+        workspaceTabs: state.workspaceTabs.map((tab) => (
+          tab.id === state.activeTabId && tab.kind === 'terminal'
+            ? { ...tab, splitDirection: direction }
+            : tab
+        )),
+      }
+    }),
 
     launchWorkspace: (payload) => {
       const state = get()
@@ -1165,12 +1537,13 @@ export const useStore = create<AppState>()(persist(
         color: nextWorkspaceColor(state.workspaceTabs.length),
         view: 'terminal',
         kind: 'terminal',
+        splitDirection: 'vertical',
         paneCount,
         isActive: true,
         workingDirectory,
         createdAt: new Date().toISOString(),
       }
-      const panes = createTerminalPanes(paneCount, workingDirectory, agentConfig)
+      const panes = createTerminalPanes(paneCount, workingDirectory, agentConfig, 'auto', payload.agentBootstrapCommands)
 
       set((currentState) => ({
         workspaceTabs: [...markActiveTabs(currentState.workspaceTabs, null), tab],
@@ -1185,13 +1558,106 @@ export const useStore = create<AppState>()(persist(
       }))
     },
 
+    launchQuickShellWorkspace: (payload) => {
+      const state = get()
+      const workingDirectory = payload.workingDirectory?.trim() || getFallbackWorkingDirectory()
+      const id = generateId()
+      const shellKind = payload.shellKind ?? 'auto'
+      const shellLabel = shellKind === 'powershell'
+        ? 'PowerShell'
+        : shellKind === 'command-prompt'
+          ? 'Command Prompt'
+          : shellKind === 'git-bash'
+            ? 'Git Bash'
+            : 'Workspace'
+      const tab: WorkspaceTab = {
+        id,
+        name: payload.name?.trim() || getNextWorkspaceName(state.workspaceTabs, 'terminal', shellLabel),
+        color: nextWorkspaceColor(state.workspaceTabs.length),
+        view: 'terminal',
+        kind: 'terminal',
+        splitDirection: 'vertical',
+        paneCount: 1,
+        isActive: true,
+        workingDirectory,
+        createdAt: new Date().toISOString(),
+      }
+      const panes = [createTerminalPane(workingDirectory, {
+        isActive: true,
+        label: shellLabel,
+        shellKind,
+        shellBootstrapCommand: payload.shellBootstrapCommand,
+      })]
+
+      set((currentState) => ({
+        workspaceTabs: [...markActiveTabs(currentState.workspaceTabs, null), tab],
+        activeTabId: id,
+        terminalSessions: {
+          ...currentState.terminalSessions,
+          [id]: panes,
+        },
+        currentView: 'terminal',
+      }))
+    },
+
+    addPaneToActiveWorkspace: (payload) => {
+      const state = get()
+      const activeWorkspaceId = state.activeTabId
+
+      if (!activeWorkspaceId) {
+        return null
+      }
+
+      const activeWorkspace = state.workspaceTabs.find((tab) => tab.id === activeWorkspaceId && tab.kind === 'terminal')
+      const panes = state.terminalSessions[activeWorkspaceId] ?? []
+
+      if (!activeWorkspace) {
+        return null
+      }
+
+      const workingDirectory = activeWorkspace.workingDirectory || panes[0]?.cwd || getFallbackWorkingDirectory()
+      const shellKind = payload?.shellKind ?? 'auto'
+      const nextPane = createTerminalPane(workingDirectory, {
+        isActive: true,
+        label: payload?.label,
+        shellKind,
+        shellBootstrapCommand: payload?.shellBootstrapCommand,
+      })
+
+      set((currentState) => ({
+        terminalSessions: {
+          ...currentState.terminalSessions,
+          [activeWorkspaceId]: [
+            ...(currentState.terminalSessions[activeWorkspaceId] ?? []).map((pane) => ({ ...pane, isActive: false })),
+            nextPane,
+          ],
+        },
+        workspaceTabs: currentState.workspaceTabs.map((tab) => (
+          tab.id === activeWorkspaceId
+            ? {
+              ...tab,
+              paneCount: (currentState.terminalSessions[activeWorkspaceId] ?? []).length + 1,
+              splitDirection: payload?.splitDirection ?? tab.splitDirection ?? 'vertical',
+            }
+            : tab
+        )),
+        currentView: 'terminal',
+      }))
+
+      return nextPane.id
+    },
+
     launchSwarm: (payload) => {
       const state = get()
       const name = payload.name.trim() || getNextWorkspaceName(state.workspaceTabs, 'swarm', 'SloerSwarm')
       const objective = payload.objective.trim()
       const workingDirectory = payload.workingDirectory.trim() || getFallbackWorkingDirectory()
-      const agents = createSwarmAgents(payload.agents, objective)
-      const panes = createSwarmTerminalPanes(agents, workingDirectory)
+      const baseAgents = createSwarmAgents(payload.agents, objective)
+      const panes = createSwarmTerminalPanes(baseAgents, workingDirectory)
+      const agents = baseAgents.map((agent, index) => ({
+        ...agent,
+        terminalPaneId: panes[index]?.id,
+      }))
       const id = generateId()
       const tab: WorkspaceTab = {
         id,
@@ -1199,6 +1665,7 @@ export const useStore = create<AppState>()(persist(
         color: nextWorkspaceColor(state.workspaceTabs.length),
         view: 'swarm-dashboard',
         kind: 'swarm',
+        splitDirection: 'vertical',
         paneCount: agents.length,
         isActive: true,
         workingDirectory,
@@ -1213,7 +1680,17 @@ export const useStore = create<AppState>()(persist(
         status: 'active',
         startedAt: new Date().toISOString(),
         knowledgeFiles: payload.knowledgeFiles,
-        messages: createSwarmMessages(name, objective, agents),
+        contextNotes: payload.contextNotes,
+        missionDirectives: payload.missionDirectives,
+        messages: createSwarmMessages(
+          name,
+          objective,
+          agents,
+          workingDirectory,
+          payload.knowledgeFiles,
+          payload.contextNotes,
+          payload.missionDirectives,
+        ),
       }
 
       set((currentState) => ({
@@ -1243,6 +1720,13 @@ export const useStore = create<AppState>()(persist(
       }
 
       return {
+        terminalSessions: {
+          ...state.terminalSessions,
+          [state.activeTabId]: (state.terminalSessions[state.activeTabId] ?? []).map((pane) => ({
+            ...pane,
+            isRunning: false,
+          })),
+        },
         swarmSessions: {
           ...state.swarmSessions,
           [state.activeTabId]: {
@@ -1309,12 +1793,35 @@ export const useStore = create<AppState>()(persist(
         createdAt: new Date().toISOString(),
         kind: 'status' as const,
       }))
+      const nextAgents: SwarmAgent[] = activeSession.agents.map((agent) => {
+        const touched = target === 'all'
+          ? agent.role === 'coord' || agent.status === 'running'
+          : agent.id === target || agent.role === 'coord'
+
+        if (!touched) {
+          return agent
+        }
+
+        const progressDelta = target === 'all' ? (agent.role === 'coord' ? 6 : 4) : (agent.id === target ? 10 : 4)
+        const tokenDelta = Math.max(24, trimmed.length * (agent.role === 'coord' ? 3 : 5))
+
+        return {
+          ...agent,
+          status: (agent.status === 'error' ? 'error' : 'running') as SwarmAgent['status'],
+          progress: Math.min(98, Math.max(agent.progress, Math.min(98, agent.progress + progressDelta))),
+          tokens: agent.tokens + tokenDelta,
+          output: target === 'all'
+            ? 'Broadcast acknowledged. Lane plan synchronized.'
+            : `Operator directive received: ${trimmed}`,
+        }
+      })
 
       return {
         swarmSessions: {
           ...state.swarmSessions,
           [state.activeTabId]: {
             ...activeSession,
+            agents: nextAgents,
             messages: [...activeSession.messages, operatorMessage, ...acknowledgements],
           },
         },
@@ -1355,27 +1862,30 @@ export const useStore = create<AppState>()(persist(
 
     startTrial: () => set({
       trialStartedAt: new Date().toISOString(),
-      userProfile: { ...get().userProfile, plan: 'pro' },
     }),
 
-    updateProfile: (updates) => set({
-      userProfile: { ...get().userProfile, ...updates },
-    }),
-
+    updateProfile: (updates) => set((state) => ({
+      userProfile: { ...state.userProfile, ...updates },
+    })),
     setShowOnStartup: (show) => set({ showOnStartup: show }),
-
+    setOnboardingCompleted: (completed) => set({ hasCompletedOnboarding: completed }),
     addRecentProject: (path) => set((state) => ({
       recentProjects: [path, ...state.recentProjects.filter((p) => p !== path)].slice(0, 10),
     })),
-
+    primeTerminalCommand: (command) => set({ pendingTerminalCommand: command?.trim() || null }),
+    consumePendingTerminalCommand: () => {
+      const command = get().pendingTerminalCommand
+      if (command) {
+        set({ pendingTerminalCommand: null })
+      }
+      return command
+    },
     isPro: () => {
       const { userProfile, trialStartedAt } = get()
       if (userProfile.plan === 'pro') return true
-      if (trialStartedAt) {
-        const trialEnd = new Date(trialStartedAt).getTime() + 7 * 24 * 60 * 60 * 1000
-        return Date.now() < trialEnd
-      }
-      return false
+      if (!trialStartedAt) return false
+      const trialEnd = new Date(trialStartedAt).getTime() + 7 * 24 * 60 * 60 * 1000
+      return Date.now() < trialEnd
     },
 
     isTrialActive: () => {
@@ -1387,7 +1897,7 @@ export const useStore = create<AppState>()(persist(
   }),
   {
     name: 'sloerspace-dev-store',
-    version: 7,
+    version: 8,
     storage: createJSONStorage(() => localStorage),
     migrate: (persistedState, version) => {
       const state = persistedState as Record<string, unknown>
@@ -1402,6 +1912,9 @@ export const useStore = create<AppState>()(persist(
       }
       if (version < 7) {
         state.customTheme = null
+      }
+      if (version < 8) {
+        state.hasCompletedOnboarding = true
       }
       return state as never
     },
@@ -1426,6 +1939,7 @@ export const useStore = create<AppState>()(persist(
       sessionDevice: state.sessionDevice,
       trialStartedAt: state.trialStartedAt,
       showOnStartup: state.showOnStartup,
+      hasCompletedOnboarding: state.hasCompletedOnboarding,
       recentProjects: state.recentProjects,
       commandAliases: state.commandAliases,
       starredCommands: state.starredCommands,

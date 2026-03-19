@@ -15,16 +15,18 @@ const NAV_ITEMS: { id: ViewId; label: string; icon: React.ElementType; shortcut:
   { id: 'settings', label: 'Settings', icon: Settings, shortcut: '⌘,' },
 ]
 
-export function NavigationMenu({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { setView, currentView, userProfile } = useStore()
+export function NavigationMenu({ isOpen, onClose, hideDesktop = false }: { isOpen: boolean; onClose: () => void; hideDesktop?: boolean }) {
+  const { setView, currentView, userProfile, isTrialActive } = useStore()
   const [collapsed, setCollapsed] = useState(false)
+  const trialActive = isTrialActive()
+  const accessLabel = userProfile.plan === 'pro' ? 'PRO' : trialActive ? 'TRIAL' : 'FREE'
 
   const desktopWidth = collapsed ? 'w-[60px]' : 'w-[220px]'
 
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className={`hidden lg:flex ${desktopWidth} shrink-0 p-2 pr-0 transition-all duration-300 ease-out`}>
+      <aside className={`${hideDesktop ? 'hidden' : 'hidden lg:flex'} ${desktopWidth} shrink-0 p-2 pr-0 transition-all duration-300 ease-out`}>
         <div className="h-full w-full overflow-hidden rounded-2xl flex flex-col" style={{ background: 'rgba(8,13,22,0.6)', borderRight: '1px solid var(--border)' }}>
           <div className="flex h-full flex-col p-2">
             {/* Logo */}
@@ -71,9 +73,9 @@ export function NavigationMenu({ isOpen, onClose }: { isOpen: boolean; onClose: 
                     <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>{userProfile.username}</span>
                   </div>
                   <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded" style={{
-                    background: userProfile.plan === 'pro' ? 'rgba(79,140,255,0.12)' : 'rgba(255,255,255,0.05)',
-                    color: userProfile.plan === 'pro' ? 'var(--accent)' : 'var(--text-muted)',
-                  }}>{userProfile.plan === 'pro' ? 'PRO' : 'FREE'}</span>
+                    background: trialActive ? 'rgba(255,191,98,0.12)' : userProfile.plan === 'pro' ? 'rgba(79,140,255,0.12)' : 'rgba(255,255,255,0.05)',
+                    color: trialActive ? 'var(--warning)' : userProfile.plan === 'pro' ? 'var(--accent)' : 'var(--text-muted)',
+                  }}>{accessLabel}</span>
                 </div>
                 <button
                   onClick={() => setCollapsed(true)}

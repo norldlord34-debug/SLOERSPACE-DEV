@@ -1,9 +1,11 @@
 'use client'
 
 import Image from 'next/image'
+import { checkAppUpdate, getAppVersion, installAppUpdate, type AppUpdateInfo } from '@/lib/desktop'
 import { useStore, ThemeId, AgentCli, SettingsTab, CustomThemePreset } from '@/store/useStore'
+import { useToast } from '@/components/Toast'
 import { Palette, Keyboard, Bot, User, Key, ExternalLink, LogOut, Download, FileText, Check, Sparkles, ShieldCheck, Command, Upload, Database, Trash2, AlertTriangle, ChevronRight, Mail } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
@@ -834,6 +836,7 @@ function ThemeCard({
 
 export function SettingsPage() {
   const store = useStore()
+  const { addToast } = useToast()
   const {
     settingsTab,
     setSettingsTab,
@@ -845,7 +848,10 @@ export function SettingsPage() {
     defaultAgent,
     setDefaultAgent,
     userProfile,
+    isTrialActive,
   } = store
+  const trialActive = isTrialActive()
+  const hasPremiumAccess = userProfile.plan === 'pro' || trialActive
   const [exportMsg, setExportMsg] = useState('')
   const [importMsg, setImportMsg] = useState('')
   const [themeActionMsg, setThemeActionMsg] = useState('')
@@ -853,6 +859,10 @@ export function SettingsPage() {
   const [importedThemePreview, setImportedThemePreview] = useState<ThemePreviewDescriptor | null>(null)
   const [showThemeJson, setShowThemeJson] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [appVersion, setAppVersion] = useState('0.1.0')
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false)
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const themeJsonInputRef = useRef<HTMLInputElement>(null)
   const themeActionTimeoutRef = useRef<number | null>(null)
@@ -891,6 +901,12 @@ export function SettingsPage() {
     [previewTheme]
   )
   const isPreviewAlreadyApplied = !hoveredThemeDescriptor && !importedThemePreview
+
+  useEffect(() => {
+    void getAppVersion().then((version) => {
+      setAppVersion(version)
+    })
+  }, [])
 
   const pushThemeActionMessage = (message: string) => {
     setThemeActionMsg(message)
@@ -939,6 +955,54 @@ export function SettingsPage() {
     localStorage.removeItem('sloerspace-dev-store')
     setShowResetConfirm(false)
     window.location.reload()
+  }
+
+  const handleCheckForUpdates = async () => {
+    setIsCheckingUpdates(true)
+
+    try {
+      const info = await checkAppUpdate()
+      if (!info) {
+        throw new Error('Update checks are only available in the desktop build.')
+      }
+
+      setUpdateInfo(info)
+
+      if (!info.hasUpdate) {
+        const message = `You already have the latest version (${info.currentVersion}).`
+        addToast(message, 'success')
+        return
+      }
+
+      if (!info.installerAvailable) {
+        const message = `Version ${info.latestVersion} is available, but no Windows installer asset was attached to the release.`
+        addToast(message, 'warning', 5200)
+        return
+      }
+
+      const message = `Version ${info.latestVersion} is ready to install.`
+      addToast(message, 'info')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Update check failed.'
+      addToast(message, 'error', 5200)
+    } finally {
+      setIsCheckingUpdates(false)
+    }
+  }
+
+  const handleInstallUpdate = async () => {
+    setIsInstallingUpdate(true)
+
+    try {
+      const installerPath = await installAppUpdate()
+      const message = `Installer launched from ${installerPath}. Follow the OS prompts to finish the upgrade.`
+      addToast(message, 'success', 6200)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Update installation failed.'
+      addToast(message, 'error', 5200)
+    } finally {
+      setIsInstallingUpdate(false)
+    }
   }
 
   const handleThemeExport = () => {
@@ -1027,14 +1091,14 @@ export function SettingsPage() {
 
   return (
     <div
-      className="premium-surface-grid h-full overflow-hidden rounded-[28px] px-5 py-6 lg:px-7 lg:py-7"
+      className="premium-surface-grid h-full overflow-hidden rounded-[32px] px-4 py-5 lg:px-6 lg:py-6"
       style={{
         background: `radial-gradient(circle at 14% 12%, ${withAlpha(activeThemeDescriptor.accent, 0.08)}, transparent 24%), radial-gradient(circle at 84% 10%, ${withAlpha(activeThemeDescriptor.secondary, 0.08)}, transparent 20%), radial-gradient(circle at 82% 84%, ${withAlpha(activeThemeDescriptor.accent, 0.06)}, transparent 18%), linear-gradient(180deg, ${activeThemeDescriptor.surface0}, ${activeThemeDescriptor.surface1})`,
       }}
     >
-      <div className="grid h-full gap-5 xl:grid-cols-[290px_1fr]">
+      <div className="grid h-full gap-4 xl:grid-cols-[220px_1fr]">
         <aside
-          className="premium-panel-elevated min-h-0 p-4 md:p-5"
+          className="premium-panel-elevated flex h-full min-h-0 flex-col rounded-[28px] p-4 md:p-5"
           style={{
             background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))',
             borderColor: 'var(--border)',
@@ -1043,15 +1107,15 @@ export function SettingsPage() {
         >
           <div className="mb-4 flex items-center gap-3">
             <div className="h-11 w-11 overflow-hidden rounded-[18px] border border-white/10 shadow-[0_16px_34px_rgba(79,140,255,0.14)]">
-              <Image src="/LOGO.png" alt="SloerSpace" width={44} height={44} className="h-full w-full object-cover" />
+              <Image src="/LOGO.png" alt="SloerSpace" width={44} height={44} className="h-full w-full object-contain" />
             </div>
             <div>
               <div className="text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--text-muted)' }}>Executive Settings</div>
-              <div className="mt-1 text-[15px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>SloerSpace Control</div>
+              <div className="mt-1 text-[14px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>SloerSpace Control</div>
             </div>
           </div>
 
-          <div className="premium-panel mb-4 p-4" style={{ background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))', borderColor: 'var(--border)' }}>
+          <div className="premium-panel mb-4 rounded-[22px] p-4" style={{ background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))', borderColor: 'var(--border)' }}>
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator</div>
@@ -1065,14 +1129,14 @@ export function SettingsPage() {
             <div className="text-[11px] font-mono break-all" style={{ color: 'var(--text-secondary)' }}>{userProfile.email}</div>
           </div>
 
-          <div className="space-y-1.5">
+          <div className="flex-1 space-y-2">
             {SETTINGS_TABS.map((tab) => {
               const Icon = tab.icon
               const active = settingsTab === tab.id
 
               return (
                 <button key={tab.id} onClick={() => setSettingsTab(tab.id)}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-[20px] text-[12px] font-semibold transition-all relative"
+                  className="relative flex w-full items-center gap-3 rounded-[20px] px-4 py-3 text-[12px] font-semibold transition-all"
                   style={{
                     background: active ? 'linear-gradient(135deg, rgba(79,140,255,0.16), rgba(40,231,197,0.08))' : 'transparent',
                     color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -1089,7 +1153,7 @@ export function SettingsPage() {
             })}
           </div>
 
-          <div className="premium-panel mt-4 p-4" style={{ background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))', borderColor: 'var(--border)' }}>
+          <div className="premium-panel mt-4 rounded-[22px] p-4" style={{ background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))', borderColor: 'var(--border)' }}>
             <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
               <Command size={12} style={{ color: 'var(--accent)' }} />
               Quick key
@@ -1099,14 +1163,14 @@ export function SettingsPage() {
         </aside>
 
         <div
-          className="premium-panel-elevated min-h-0 overflow-hidden"
+          className="premium-panel-elevated flex min-h-0 flex-col overflow-hidden rounded-[28px]"
           style={{
             background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))',
             borderColor: 'var(--border)',
             boxShadow: '0 28px 90px rgba(0,0,0,0.2)',
           }}
         >
-          <div className="border-b border-[var(--border)] px-6 py-5">
+          <div className="border-b border-[var(--border)] px-5 py-5 md:px-6 md:py-6">
             <div className="mb-3 flex flex-wrap items-center gap-3">
               <div className="premium-chip" style={{ color: 'var(--warning)' }}>
                 <Sparkles size={12} />
@@ -1125,7 +1189,7 @@ export function SettingsPage() {
             </div>
           </div>
 
-          <div className="h-[calc(100%-120px)] overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-5 md:p-6">
         {settingsTab === 'appearance' && (
           <div className="max-w-6xl space-y-5">
             <input ref={themeJsonInputRef} type="file" accept=".json" className="hidden" onChange={handleThemeImport} />
@@ -1422,156 +1486,189 @@ export function SettingsPage() {
         )}
 
         {settingsTab === 'account' && (
-          <div className="max-w-2xl">
+          <div className="max-w-[760px] space-y-5">
             <SectionHeader icon={User} title="Account" desc="Manage your profile, billing, and current session." />
 
-            <div className="space-y-4">
-              {/* PROFILE */}
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em] mb-2" style={{ color: 'var(--text-muted)' }}>Profile</div>
-              <SettingsCard>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-[18px] font-bold" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)', border: '2px solid var(--accent)' }}>
-                    {userProfile.username.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{userProfile.username}</span>
-                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(46,213,115,0.15)', color: 'var(--success)' }}>● Active</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      <Mail size={10} /> {userProfile.email}
-                    </div>
-                  </div>
-                </div>
-                <button className="btn-secondary text-[10px] flex items-center gap-1.5 mb-4">
-                  <ExternalLink size={10} /> Edit Profile
-                </button>
-                <div className="grid grid-cols-2 gap-3 p-3 rounded-xl" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-                  <div>
-                    <div className="text-[9px] uppercase font-bold tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>Email</div>
-                    <div className="text-[11px] font-mono" style={{ color: 'var(--text-primary)' }}>{userProfile.email}</div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] uppercase font-bold tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>Account ID</div>
-                    <div className="text-[11px] font-mono" style={{ color: 'var(--text-primary)' }}>{userProfile.accountId.slice(0, 8)}...{userProfile.accountId.slice(-4)}</div>
-                  </div>
-                </div>
-              </SettingsCard>
-
-              {/* BILLING */}
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em] mt-6 mb-2" style={{ color: 'var(--text-muted)' }}>Billing</div>
-              <SettingsCard>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: userProfile.plan === 'pro' ? 'var(--accent-subtle)' : 'var(--surface-3)', border: `1px solid ${userProfile.plan === 'pro' ? 'rgba(79,140,255,0.2)' : 'var(--border)'}` }}>
-                      <Bot size={16} style={{ color: userProfile.plan === 'pro' ? 'var(--accent)' : 'var(--text-muted)' }} />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{userProfile.plan === 'pro' ? 'Pro Plan' : 'Free Plan'}</span>
-                        <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: userProfile.plan === 'pro' ? 'rgba(46,213,115,0.15)' : 'var(--surface-3)', color: userProfile.plan === 'pro' ? 'var(--success)' : 'var(--text-muted)' }}>
-                          {userProfile.plan === 'pro' ? 'Active' : 'Current'}
-                        </span>
+            <div className="space-y-5">
+              <div>
+                <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Profile</div>
+                <SettingsCard className="premium-surface-grid">
+                  <div className="rounded-[22px] border p-4" style={{ background: 'linear-gradient(180deg, rgba(9,15,24,0.84), rgba(6,10,18,0.92))', borderColor: 'var(--border)' }}>
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-full text-[18px] font-bold" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)', border: '2px solid var(--accent)' }}>
+                          {userProfile.username.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{userProfile.username}</span>
+                            <span className="rounded-full px-1.5 py-0.5 text-[8px] font-bold" style={{ background: 'rgba(46,213,115,0.15)', color: 'var(--success)' }}>● Active</span>
+                          </div>
+                          <div className="mt-1 flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                            <Mail size={10} /> {userProfile.email}
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        {userProfile.plan === 'pro' ? 'Full access to all SloerSpace features' : 'Limited access — upgrade for full features'}
+
+                      <button className="btn-secondary text-[10px] flex items-center gap-1.5">
+                        <ExternalLink size={10} /> Edit Profile
+                      </button>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-[16px] border px-4 py-3" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                        <div className="mb-1 text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Email</div>
+                        <div className="text-[11px] font-mono break-all" style={{ color: 'var(--text-primary)' }}>{userProfile.email}</div>
+                      </div>
+                      <div className="rounded-[16px] border px-4 py-3" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                        <div className="mb-1 text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Account ID</div>
+                        <div className="text-[11px] font-mono" style={{ color: 'var(--text-primary)' }}>{userProfile.accountId.slice(0, 8)}...{userProfile.accountId.slice(-4)}</div>
                       </div>
                     </div>
                   </div>
-                  <button className="btn-primary text-[10px] flex items-center gap-1">
-                    <ExternalLink size={10} /> {userProfile.plan === 'pro' ? 'Manage Plan' : 'Upgrade'}
-                  </button>
-                </div>
+                </SettingsCard>
+              </div>
 
-                <div className="space-y-1">
-                  <button className="w-full flex items-center justify-between p-3 rounded-xl transition-all hover:bg-[var(--surface-2)]" style={{ border: '1px solid var(--border)' }}>
-                    <div className="flex items-center gap-2.5">
-                      <Sparkles size={14} style={{ color: 'var(--accent)' }} />
-                      <div className="text-left">
-                        <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>View Plans</div>
-                        <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Compare plans and pricing</div>
+              <div>
+                <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Billing</div>
+                <SettingsCard className="premium-surface-grid">
+                  <div className="rounded-[22px] border p-4" style={{ background: 'linear-gradient(180deg, rgba(9,15,24,0.84), rgba(6,10,18,0.92))', borderColor: 'var(--border)' }}>
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: trialActive ? 'rgba(255,191,98,0.12)' : hasPremiumAccess ? 'var(--accent-subtle)' : 'var(--surface-3)', border: `1px solid ${trialActive ? 'rgba(255,191,98,0.2)' : hasPremiumAccess ? 'rgba(79,140,255,0.2)' : 'var(--border)'}` }}>
+                          <Bot size={15} style={{ color: trialActive ? 'var(--warning)' : hasPremiumAccess ? 'var(--accent)' : 'var(--text-muted)' }} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{userProfile.plan === 'pro' ? 'Pro Plan' : trialActive ? 'Pro Trial' : 'Community Plan'}</span>
+                            <span className="rounded-full px-1.5 py-0.5 text-[8px] font-bold" style={{ background: trialActive ? 'rgba(255,191,98,0.15)' : hasPremiumAccess ? 'rgba(46,213,115,0.15)' : 'var(--surface-3)', color: trialActive ? 'var(--warning)' : hasPremiumAccess ? 'var(--success)' : 'var(--text-muted)' }}>
+                              {userProfile.plan === 'pro' ? 'Active' : trialActive ? 'Trial' : 'Current'}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                            {userProfile.plan === 'pro'
+                              ? 'Full access to all SloerSpace features'
+                              : trialActive
+                                ? 'Trial access is active across premium operator surfaces'
+                                : 'Limited access — upgrade for full features'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button className="btn-primary text-[10px] flex items-center gap-1.5">
+                        <ExternalLink size={10} /> {userProfile.plan === 'pro' ? 'Manage Plan' : trialActive ? 'Review Trial' : 'Upgrade'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    <button className="w-full flex items-center justify-between rounded-[18px] border px-4 py-3 text-left transition-all hover:bg-[var(--surface-2)]" style={{ borderColor: 'var(--border)' }}>
+                      <div className="flex items-center gap-2.5">
+                        <Sparkles size={14} style={{ color: 'var(--accent)' }} />
+                        <div>
+                          <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>View Plans</div>
+                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Compare plans and pricing</div>
+                        </div>
+                      </div>
+                      <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
+                    </button>
+                    <button className="w-full flex items-center justify-between rounded-[18px] border px-4 py-3 text-left transition-all hover:bg-[var(--surface-2)]" style={{ borderColor: 'var(--border)' }}>
+                      <div className="flex items-center gap-2.5">
+                        <Key size={14} style={{ color: 'var(--text-muted)' }} />
+                        <div>
+                          <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Payment Methods</div>
+                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Update cards and billing details</div>
+                        </div>
+                      </div>
+                      <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
+                    </button>
+                  </div>
+                </SettingsCard>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div>
+                  <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Session</div>
+                  <SettingsCard>
+                    <div className="rounded-[18px] border p-4" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'var(--accent-subtle)' }}>
+                          <Command size={14} style={{ color: 'var(--accent)' }} />
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Current Device</span>
+                            <span className="rounded-full px-1.5 py-0.5 text-[8px] font-bold" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>This Session</span>
+                          </div>
+                          <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>SloerSpace Desktop · {store.sessionDevice || 'Windows'}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex items-center justify-between rounded-[16px] border px-4 py-3" style={{ borderColor: 'var(--border)' }}>
+                        <div>
+                          <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Sign Out</div>
+                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>End your session on this device</div>
+                        </div>
+                        <button onClick={() => { store.logout(); store.setView('login') }} className="btn-ghost text-[10px] flex items-center gap-1">
+                          <LogOut size={10} /> Sign Out
+                        </button>
                       </div>
                     </div>
-                    <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
-                  </button>
-                  <button className="w-full flex items-center justify-between p-3 rounded-xl transition-all hover:bg-[var(--surface-2)]" style={{ border: '1px solid var(--border)' }}>
-                    <div className="flex items-center gap-2.5">
-                      <Key size={14} style={{ color: 'var(--text-muted)' }} />
-                      <div className="text-left">
-                        <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Payment Methods</div>
-                        <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Update cards and billing details</div>
+                  </SettingsCard>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Debug</div>
+                  <SettingsCard>
+                    <div className="space-y-3">
+                      <div className="rounded-[18px] border p-4" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5">
+                            <Download size={14} style={{ color: 'var(--text-muted)' }} />
+                            <div>
+                              <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Updates</div>
+                              <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Current version: {appVersion}</div>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              if (updateInfo?.hasUpdate && updateInfo.installerAvailable) {
+                                void handleInstallUpdate()
+                                return
+                              }
+                              void handleCheckForUpdates()
+                            }}
+                            disabled={isCheckingUpdates || isInstallingUpdate}
+                            className="btn-secondary text-[10px] flex items-center gap-1 disabled:opacity-60"
+                          >
+                            <Download size={10} />
+                            {isInstallingUpdate
+                              ? 'Installing…'
+                              : isCheckingUpdates
+                                ? 'Checking…'
+                                : updateInfo?.hasUpdate && updateInfo.installerAvailable
+                                  ? `Install ${updateInfo.latestVersion}`
+                                  : 'Check'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[18px] border p-4" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                        <div className="flex items-center gap-2.5">
+                          <FileText size={14} style={{ color: 'var(--text-muted)' }} />
+                          <div>
+                            <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Log file</div>
+                            <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>For debugging auth and API issues.</div>
+                          </div>
+                        </div>
+                        <div className="mt-3 rounded-[14px] border px-3 py-2.5 font-mono text-[9px]" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)', borderColor: 'var(--border)' }}>
+                          C:\Users\...\AppData\Local\sloerspace\logs\sloerspace-tauri.log
+                        </div>
                       </div>
                     </div>
-                    <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
-                  </button>
+                  </SettingsCard>
                 </div>
-
-                <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-[10px]" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
-                  <ShieldCheck size={12} /> Payments are handled securely through Stripe and open in your browser.
-                </div>
-              </SettingsCard>
-
-              {/* SESSION */}
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em] mt-6 mb-2" style={{ color: 'var(--text-muted)' }}>Session</div>
-              <SettingsCard>
-                <div className="flex items-center gap-3 p-3 rounded-xl mb-3" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'var(--accent-subtle)' }}>
-                    <Command size={14} style={{ color: 'var(--accent)' }} />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Current Device</span>
-                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>This Session</span>
-                    </div>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>SloerSpace Desktop · {store.sessionDevice || 'Windows'}</div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between p-3 rounded-xl" style={{ border: '1px solid var(--border)' }}>
-                  <div className="flex items-center gap-2.5">
-                    <LogOut size={14} style={{ color: 'var(--text-muted)' }} />
-                    <div>
-                      <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Sign Out</div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>End your session on this device</div>
-                    </div>
-                  </div>
-                  <button onClick={() => { store.logout(); store.setView('login') }} className="btn-ghost text-[10px] flex items-center gap-1">
-                    <LogOut size={10} /> Sign Out
-                  </button>
-                </div>
-
-                <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-[10px]" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
-                  <ShieldCheck size={12} /> Your session is encrypted. Sign out when using shared devices.
-                </div>
-              </SettingsCard>
-
-              {/* DEBUG */}
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em] mt-6 mb-2" style={{ color: 'var(--text-muted)' }}>Debug</div>
-              <SettingsCard>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2.5">
-                    <Download size={14} style={{ color: 'var(--text-muted)' }} />
-                    <div>
-                      <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Updates</div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Current version: 0.1.0</div>
-                    </div>
-                  </div>
-                  <button className="btn-secondary text-[10px] flex items-center gap-1"><Download size={10} /> Check for Updates</button>
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-xl" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-                  <div className="flex items-center gap-2.5">
-                    <FileText size={14} style={{ color: 'var(--text-muted)' }} />
-                    <div>
-                      <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Log file</div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>For debugging auth and API issues.</div>
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-2 p-2.5 rounded-lg font-mono text-[9px] flex items-center justify-between" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
-                  <span>C:\Users\...\AppData\Local\sloerspace\logs\sloerspace-tauri.log</span>
-                  <button className="btn-ghost text-[8px] px-2 py-1">Show in Explorer</button>
-                </div>
-              </SettingsCard>
+              </div>
             </div>
           </div>
         )}
@@ -1579,7 +1676,7 @@ export function SettingsPage() {
         {settingsTab === 'api-keys' && (
           <div className="max-w-2xl">
             <SectionHeader icon={Key} title="API Keys" desc="Create and manage API keys for MCP and programmatic SloerSpace access." />
-            {userProfile.plan === 'free' ? (
+            {!hasPremiumAccess ? (
               <SettingsCard className="flex flex-col items-center p-10 text-center">
                 <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4" style={{ background: 'var(--accent-subtle)', border: '1px solid rgba(79,140,255,0.15)' }}>
                   <Key size={24} style={{ color: 'var(--accent)' }} />

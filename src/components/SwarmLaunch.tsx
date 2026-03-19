@@ -1,6 +1,7 @@
 'use client'
 
-import { getDefaultWorkingDirectory, openFolderDialog } from '@/lib/desktop'
+import { getAgentCliResolutions, getDefaultWorkingDirectory, isTauriApp, openFolderDialog } from '@/lib/desktop'
+import { useToast } from '@/components/Toast'
 import { generateId, type AgentCli, type AgentRole, type LaunchSwarmAgent, useStore } from '@/store/useStore'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -10,11 +11,11 @@ import {
 } from 'lucide-react'
 
 const SWARM_STEPS = [
-  { id: 'name', label: 'Name', icon: Sparkles, title: 'Name your swarm', description: 'Give your mission a short identity you can find later in the workspace.' },
+  { id: 'agents', label: 'Roster', icon: Bot, title: 'Build your roster', description: 'Pick a preset, tune roles, and configure how each agent operates.' },
+  { id: 'prompt', label: 'Mission', icon: MessageSquareText, title: 'Swarm mission', description: 'Describe what the swarm should build, fix, investigate, or ship.' },
   { id: 'directory', label: 'Directory', icon: FolderOpen, title: 'Choose a directory', description: 'Select the project folder your swarm agents will work inside.' },
-  { id: 'prompt', label: 'Prompt', icon: MessageSquareText, title: 'Swarm prompt', description: 'Describe what the swarm should build, fix, investigate, or ship.' },
-  { id: 'knowledge', label: 'Knowledge', icon: BookOpen, title: 'Supporting knowledge', description: 'Attach specs, screenshots, notes, logs, or references to guide the swarm.' },
-  { id: 'agents', label: 'Agents', icon: Bot, title: 'Agent roster', description: 'Pick a preset, tune roles, and configure how each agent operates.' },
+  { id: 'knowledge', label: 'Context', icon: BookOpen, title: 'Supporting context', description: 'Attach specs, screenshots, notes, logs, or references to guide the swarm.' },
+  { id: 'name', label: 'Name', icon: Sparkles, title: 'Name your swarm', description: 'Give your mission a short identity you can find later in the workspace.' },
 ] as const
 
 const CLI_OPTIONS: Array<{ id: AgentCli; label: string; subtitle: string; short: string }> = [
@@ -61,6 +62,21 @@ const MISSION_TEMPLATES = [
     prompt: 'Refactor the target area with a clear execution plan, preserve behavior, improve maintainability, and require review sign-off before handoff.',
   },
 ] as const
+
+const SWARM_SKILLS = [
+  { id: 'incremental-commits', group: 'Workflow', title: 'Incremental commits', description: 'Ship small validated changes frequently.' },
+  { id: 'refactor-only', group: 'Workflow', title: 'Refactor only', description: 'Restructure safely without changing behavior.' },
+  { id: 'monorepo-aware', group: 'Workflow', title: 'Monorepo aware', description: 'Respect package boundaries and shared tooling.' },
+  { id: 'test-driven', group: 'Quality', title: 'Test-driven', description: 'Write tests, then implement and verify.' },
+  { id: 'code-review', group: 'Quality', title: 'Code review', description: 'Route all changes through a review lane.' },
+  { id: 'documentation', group: 'Quality', title: 'Documentation', description: 'Document public APIs and operator-visible changes.' },
+  { id: 'security-audit', group: 'Quality', title: 'Security audit', description: 'Check for vulnerabilities while building.' },
+  { id: 'keep-ci-green', group: 'Ops', title: 'Keep CI green', description: 'Protect validation and release posture.' },
+  { id: 'migration-safe', group: 'Ops', title: 'Migration safe', description: 'Keep data and rollout changes reversible.' },
+  { id: 'performance', group: 'Analysis', title: 'Performance', description: 'Optimize for speed and efficiency.' },
+] as const
+
+const SWARM_SKILL_GROUPS = ['Workflow', 'Quality', 'Ops', 'Analysis'] as const
 
 const SWARM_HERO_SIGNALS: Array<{ label: string; value: string; detail: string; icon: typeof Sparkles }> = [
   { label: 'Mission graph', value: 'Shared execution map', detail: 'One objective, one roster, one control surface.', icon: Layers3 },
@@ -129,6 +145,24 @@ const SWARM_PLAYBOOK_SECTIONS = [
     body: 'The operator can launch, direct, filter, review, and halt the swarm without losing situational awareness. The goal is leverage, not blind delegation.',
   },
 ] as const
+
+type CliDetectionState = 'checking' | 'available' | 'missing' | 'unverified'
+
+const INITIAL_CLI_DETECTION: Record<AgentCli, CliDetectionState> = {
+  claude: 'checking',
+  codex: 'checking',
+  gemini: 'checking',
+  opencode: 'checking',
+  cursor: 'checking',
+}
+
+const EMPTY_CLI_BOOTSTRAP: Record<AgentCli, string | null> = {
+  claude: null,
+  codex: null,
+  gemini: null,
+  opencode: null,
+  cursor: null,
+}
 
 function getTaskTemplate(role: AgentRole, objective: string) {
   const mission = objective.trim() || 'the shared swarm objective'
@@ -202,7 +236,10 @@ function resolvePathCommand(input: string, current: string, fallback: string) {
 export function SwarmLaunch() {
   const setView = useStore((s) => s.setView)
   const launchSwarm = useStore((s) => s.launchSwarm)
+  const addRecentProject = useStore((s) => s.addRecentProject)
   const userProfile = useStore((s) => s.userProfile)
+  const recentProjects = useStore((s) => s.recentProjects)
+  const { addToast } = useToast()
   const [step, setStep] = useState(0)
   const [swarmName, setSwarmName] = useState('')
   const [objective, setObjective] = useState('')
@@ -210,6 +247,10 @@ export function SwarmLaunch() {
   const [defaultDir, setDefaultDir] = useState('')
   const [pathCommand, setPathCommand] = useState('')
   const [knowledgeFiles, setKnowledgeFiles] = useState<string[]>([])
+  const [contextNotes, setContextNotes] = useState('')
+  const [missionDirectives, setMissionDirectives] = useState<string[]>([])
+  const [cliDetection, setCliDetection] = useState<Record<AgentCli, CliDetectionState>>(INITIAL_CLI_DETECTION)
+  const [cliBootstrapCommands, setCliBootstrapCommands] = useState<Record<AgentCli, string | null>>(EMPTY_CLI_BOOTSTRAP)
   const [globalCli, setGlobalCli] = useState<AgentCli>('claude')
   const [presetSize, setPresetSize] = useState<number>(5)
   const [agents, setAgents] = useState<LaunchSwarmAgent[]>(() => buildAgentsFromPreset({ coord: 1, builder: 2, scout: 1, reviewer: 1, custom: 0 }, 'claude', ''))
@@ -220,6 +261,28 @@ export function SwarmLaunch() {
   const wizardRef = useRef<HTMLDivElement>(null)
   const playbookRef = useRef<HTMLDivElement>(null)
   const faqRef = useRef<HTMLDivElement>(null)
+  const previousObjectiveRef = useRef('')
+  const directorySuggestions = useMemo(
+    () => Array.from(new Set([workDir, defaultDir, ...recentProjects].filter(Boolean))).slice(0, 6),
+    [defaultDir, recentProjects, workDir],
+  )
+
+  const applyWorkDir = (nextDir: string, options?: { syncCommand?: boolean; remember?: boolean }) => {
+    const normalized = nextDir.trim()
+    if (!normalized) {
+      return
+    }
+
+    setWorkDir(normalized)
+
+    if (options?.syncCommand ?? true) {
+      setPathCommand(normalized)
+    }
+
+    if (options?.remember) {
+      addRecentProject(normalized)
+    }
+  }
 
   useEffect(() => {
     let mounted = true
@@ -229,12 +292,14 @@ export function SwarmLaunch() {
         if (!mounted) return
         setDefaultDir(directory)
         setWorkDir((current) => current || directory)
+        setPathCommand((current) => current || directory)
       })
       .catch(() => {
         if (!mounted) return
         const fallback = 'C:\\'
         setDefaultDir(fallback)
         setWorkDir((current) => current || fallback)
+        setPathCommand((current) => current || fallback)
       })
 
     return () => {
@@ -258,6 +323,85 @@ export function SwarmLaunch() {
       setSelectedAgentId(agents[0]?.id ?? null)
     }
   }, [agents, selectedAgentId])
+
+  useEffect(() => {
+    const previousObjective = previousObjectiveRef.current
+
+    if (previousObjective === objective) {
+      return
+    }
+
+    setAgents((current) => current.map((agent) => {
+      const previousTemplate = getTaskTemplate(agent.role, previousObjective)
+      const currentTask = agent.task.trim()
+
+      if (!currentTask || currentTask === previousTemplate) {
+        return {
+          ...agent,
+          task: getTaskTemplate(agent.role, objective),
+        }
+      }
+
+      return agent
+    }))
+
+    previousObjectiveRef.current = objective
+  }, [objective])
+
+  useEffect(() => {
+    if (!isTauriApp()) {
+      setCliDetection({
+        claude: 'unverified',
+        codex: 'unverified',
+        gemini: 'unverified',
+        opencode: 'unverified',
+        cursor: 'unverified',
+      })
+      setCliBootstrapCommands(EMPTY_CLI_BOOTSTRAP)
+      return
+    }
+
+    let disposed = false
+    setCliDetection((current) => Object.keys(current).reduce((acc, key) => ({
+      ...acc,
+      [key]: 'checking',
+    }), {} as Record<AgentCli, CliDetectionState>))
+
+    void getAgentCliResolutions(CLI_OPTIONS.map((option) => option.id)).then((entries) => {
+      if (disposed) {
+        return
+      }
+
+      const nextDetection = { ...INITIAL_CLI_DETECTION }
+      const nextBootstraps = { ...EMPTY_CLI_BOOTSTRAP }
+
+      entries.forEach((entry) => {
+        const cli = entry.cli as AgentCli
+        nextDetection[cli] = entry.available ? 'available' : 'missing'
+        nextBootstraps[cli] = entry.bootstrapCommand
+      })
+
+      setCliDetection(nextDetection)
+      setCliBootstrapCommands(nextBootstraps)
+    }).catch(() => {
+      if (disposed) {
+        return
+      }
+
+      setCliDetection({
+        claude: 'unverified',
+        codex: 'unverified',
+        gemini: 'unverified',
+        opencode: 'unverified',
+        cursor: 'unverified',
+      })
+      setCliBootstrapCommands(EMPTY_CLI_BOOTSTRAP)
+    })
+
+    return () => {
+      disposed = true
+    }
+  }, [])
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -293,13 +437,51 @@ export function SwarmLaunch() {
   const knowledgeLabel = knowledgeFiles.length === 0 ? 'No linked files' : knowledgeFiles.length === 1 ? '1 linked file' : `${knowledgeFiles.length} linked files`
   const activePreset = PRESET_OPTIONS.find((preset) => preset.total === presetSize) ?? null
   const activeRoleCount = ROLE_OPTIONS.filter((role) => roleCounts[role.id] > 0).length
+  const selectedDirectiveCount = missionDirectives.length
+  const selectedDirectiveTitles = missionDirectives.map((directiveId) => (
+    SWARM_SKILLS.find((skill) => skill.id === directiveId)?.title ?? directiveId
+  ))
+  const cliAvailabilitySummary = CLI_OPTIONS.reduce((acc, option) => {
+    const state = cliDetection[option.id]
+
+    if (state === 'available') acc.available += 1
+    if (state === 'missing') acc.missing += 1
+    if (state === 'checking') acc.checking += 1
+    if (state === 'unverified') acc.unverified += 1
+
+    return acc
+  }, { available: 0, missing: 0, checking: 0, unverified: 0 })
+  const unavailableSelectedClis = Array.from(new Set(
+    agents
+      .map((agent) => agent.cli)
+      .filter((cli) => cliDetection[cli] === 'missing'),
+  ))
+  const preferredAvailableCli = CLI_OPTIONS.find((option) => cliDetection[option.id] === 'available')?.id ?? null
+
+  const getCliDetectionMeta = (cli: AgentCli) => {
+    const state = cliDetection[cli]
+
+    if (state === 'available') {
+      return { label: 'Detected', color: 'var(--success)' }
+    }
+
+    if (state === 'missing') {
+      return { label: 'Not found', color: 'var(--error)' }
+    }
+
+    if (state === 'checking') {
+      return { label: 'Checking', color: 'var(--warning)' }
+    }
+
+    return { label: 'Unverified', color: 'var(--text-muted)' }
+  }
 
   const canContinue = [
-    swarmName.trim().length > 0,
-    workDir.trim().length > 0,
-    objective.trim().length > 0,
-    true,
     totalAgents > 0,
+    objective.trim().length > 0,
+    workDir.trim().length > 0,
+    true,
+    swarmName.trim().length > 0,
   ][step]
 
   const applyPreset = (size: number, cli = globalCli) => {
@@ -323,6 +505,17 @@ export function SwarmLaunch() {
 
   const updateAgent = (id: string, updates: Partial<LaunchSwarmAgent>) => {
     setAgents((current) => current.map((agent) => agent.id === id ? { ...agent, ...updates } : agent))
+  }
+
+  const resolveTaskForRole = (agent: LaunchSwarmAgent, nextRole: AgentRole) => {
+    const currentTask = agent.task.trim()
+    const currentTemplate = getTaskTemplate(agent.role, objective)
+
+    if (!currentTask || currentTask === currentTemplate) {
+      return getTaskTemplate(nextRole, objective)
+    }
+
+    return agent.task
   }
 
   const handleGlobalCliChange = (cli: AgentCli) => {
@@ -355,16 +548,63 @@ export function SwarmLaunch() {
     setKnowledgeFiles((current) => [...current, ...incoming.filter((file) => !current.includes(file))])
   }
 
-  const handleLaunch = () => {
+  const toggleMissionDirective = (directiveId: string) => {
+    setMissionDirectives((current) => (
+      current.includes(directiveId)
+        ? current.filter((item) => item !== directiveId)
+        : [...current, directiveId]
+    ))
+  }
+
+  const handleLaunch = async () => {
     if (!readyToLaunch) return
+
+    let nextBootstraps = cliBootstrapCommands
+
+    if (isTauriApp()) {
+      try {
+        const selectedCliIds = Array.from(new Set(agents.map((agent) => agent.cli)))
+        const resolutions = await getAgentCliResolutions(selectedCliIds)
+        nextBootstraps = resolutions.reduce((acc, entry) => {
+          if (CLI_OPTIONS.some((option) => option.id === entry.cli)) {
+            acc[entry.cli as AgentCli] = entry.bootstrapCommand
+          }
+          return acc
+        }, { ...EMPTY_CLI_BOOTSTRAP })
+        setCliBootstrapCommands(nextBootstraps)
+        setCliDetection((current) => {
+          const next = { ...current }
+          resolutions.forEach((entry) => {
+            if (CLI_OPTIONS.some((option) => option.id === entry.cli)) {
+              next[entry.cli as AgentCli] = entry.available ? 'available' : 'missing'
+            }
+          })
+          return next
+        })
+      } catch (error) {
+        addToast(error instanceof Error ? error.message : 'Failed to resolve local agent CLIs.', 'error', 5200)
+        return
+      }
+    }
+
+    addRecentProject(workDir)
 
     launchSwarm({
       name: swarmName,
       objective,
       workingDirectory: workDir,
       knowledgeFiles,
-      agents,
+      contextNotes,
+      missionDirectives,
+      agents: agents.map((agent) => ({
+        ...agent,
+        cliBootstrapCommand: nextBootstraps[agent.cli] ?? null,
+      })),
     })
+
+    if (agents.some((agent) => !nextBootstraps[agent.cli])) {
+      addToast('Some agents launched without a detected local CLI. Those lanes will stay in the shell until you start the tool manually.', 'warning', 6200)
+    }
   }
 
   const handleBrowseDirectory = async () => {
@@ -374,11 +614,16 @@ export function SwarmLaunch() {
     try {
       const path = await openFolderDialog(workDir || defaultDir || undefined)
       if (path) {
-        setWorkDir(path)
+        applyWorkDir(path, { remember: true })
       }
     } finally {
       setIsBrowsingDirectory(false)
     }
+  }
+
+  const applyPathCommand = () => {
+    const nextDir = resolvePathCommand(pathCommand, workDir, defaultDir || workDir)
+    applyWorkDir(nextDir, { syncCommand: true, remember: true })
   }
 
   const scrollToSection = (ref: React.RefObject<HTMLDivElement>) => {
@@ -431,8 +676,8 @@ export function SwarmLaunch() {
           </div>
         </div>
 
-        {step === 0 && (
-          <div className="mt-10 max-w-2xl mx-auto">
+        {step === 4 && (
+          <div className="mt-10 grid gap-5 xl:grid-cols-[1.04fr_0.96fr]">
             <div className="swarm-panel-soft swarm-hover-lift p-6 md:p-8 lg:p-10">
               <div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-3" style={{ color: 'var(--text-muted)' }}>
                 Mission identity
@@ -453,10 +698,70 @@ export function SwarmLaunch() {
                 Use a short operational label. It will appear in workspace tabs, terminal panes, and swarm history.
               </div>
             </div>
+
+            <div className="swarm-panel-soft p-5 md:p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
+                    Launch review
+                  </div>
+                  <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                    Final mission envelope
+                  </div>
+                </div>
+                <div className="premium-chip" style={{ color: readyToLaunch ? 'var(--success)' : 'var(--warning)' }}>
+                  <Rocket size={12} />
+                  {readyToLaunch ? 'Ready' : 'Pending'}
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Roster</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{totalAgents} agents</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{activeRoleCount} role lanes active</div>
+                </div>
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Context</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: knowledgeFiles.length > 0 || selectedDirectiveCount > 0 || contextNotes.trim() ? 'var(--success)' : 'var(--text-primary)' }}>
+                    {knowledgeLabel}
+                  </div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{selectedDirectiveCount} directives · {contextNotes.trim() ? 'notes linked' : 'no notes'}</div>
+                </div>
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>CLI readiness</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: unavailableSelectedClis.length > 0 ? 'var(--warning)' : cliAvailabilitySummary.available > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
+                    {cliAvailabilitySummary.available} detected
+                  </div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{unavailableSelectedClis.length > 0 ? `Unavailable: ${unavailableSelectedClis.join(', ')}` : 'Selected CLIs pass local probe or remain unverified'}</div>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border)', background: 'rgba(4,9,18,0.56)' }}>
+                <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator preview</div>
+                <div className="mt-3 text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+                  {objective.trim() || 'Mission brief pending.'}
+                </div>
+                {selectedDirectiveTitles.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {selectedDirectiveTitles.slice(0, 6).map((title) => (
+                      <span key={title} className="rounded-full px-3 py-1 text-[9px] font-semibold" style={{ background: 'rgba(79,140,255,0.1)', color: 'var(--accent)' }}>
+                        {title}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {unavailableSelectedClis.length > 0 && (
+                  <div className="mt-4 rounded-2xl px-4 py-3 text-[10px] leading-6" style={{ background: 'rgba(255,191,98,0.08)', color: 'var(--warning)' }}>
+                    Unavailable CLIs detected in this roster: {unavailableSelectedClis.join(', ')}. Switch to a detected CLI before launch if you want real local runtime alignment.
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
-        {step === 1 && (
+        {step === 2 && (
           <div className="mt-10 max-w-3xl mx-auto space-y-4">
             <div className="grid gap-3 md:grid-cols-3">
               <div className="premium-stat px-4 py-4">
@@ -482,7 +787,7 @@ export function SwarmLaunch() {
                 <FolderOpen size={16} style={{ color: 'var(--accent)' }} />
                 <input
                   value={workDir}
-                  onChange={(e) => setWorkDir(e.target.value)}
+                  onChange={(e) => applyWorkDir(e.target.value)}
                   className="flex-1 bg-transparent text-[12px] font-mono outline-none"
                   style={{ color: 'var(--text-primary)' }}
                 />
@@ -494,7 +799,7 @@ export function SwarmLaunch() {
                   {isBrowsingDirectory ? 'Opening…' : 'Browse'}
                 </button>
                 <button
-                  onClick={() => defaultDir && setWorkDir(defaultDir)}
+                  onClick={() => defaultDir && applyWorkDir(defaultDir, { remember: true })}
                   disabled={!defaultDir}
                   className="btn-secondary text-[10px] px-4 py-2"
                 >
@@ -505,6 +810,24 @@ export function SwarmLaunch() {
                 <span className="premium-kbd">tab</span>
                 <span>Paste or browse to the repository root the swarm will operate in.</span>
               </div>
+              {directorySuggestions.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {directorySuggestions.map((path) => (
+                    <button
+                      key={path}
+                      onClick={() => applyWorkDir(path, { remember: true })}
+                      className="rounded-full border px-3 py-1.5 text-[9px] font-semibold transition-all swarm-hover-lift"
+                      style={{
+                        borderColor: workDir === path ? 'rgba(79,140,255,0.28)' : 'rgba(255,255,255,0.08)',
+                        background: workDir === path ? 'rgba(79,140,255,0.12)' : 'rgba(4,9,18,0.56)',
+                        color: workDir === path ? 'var(--accent)' : 'var(--text-secondary)',
+                      }}
+                    >
+                      {path}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="swarm-panel-soft p-5 md:p-6">
@@ -515,9 +838,7 @@ export function SwarmLaunch() {
                   onChange={(e) => setPathCommand(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
-                      const nextDir = resolvePathCommand(pathCommand, workDir, defaultDir || workDir)
-                      setWorkDir(nextDir)
-                      setPathCommand('')
+                      applyPathCommand()
                     }
                   }}
                   placeholder="cd ~/projects/my-app or ../repo"
@@ -525,11 +846,7 @@ export function SwarmLaunch() {
                   style={{ color: 'var(--text-primary)' }}
                 />
                 <button
-                  onClick={() => {
-                    const nextDir = resolvePathCommand(pathCommand, workDir, defaultDir || workDir)
-                    setWorkDir(nextDir)
-                    setPathCommand('')
-                  }}
+                  onClick={applyPathCommand}
                   className="btn-secondary text-[10px] px-4 py-2"
                 >
                   Go
@@ -542,7 +859,7 @@ export function SwarmLaunch() {
           </div>
         )}
 
-        {step === 2 && (
+        {step === 1 && (
           <div className="mt-10 max-w-4xl mx-auto">
             <div className="swarm-panel-soft p-6 md:p-8 lg:p-9">
               <div className="mb-4 flex flex-wrap gap-2">
@@ -578,63 +895,155 @@ export function SwarmLaunch() {
         )}
 
         {step === 3 && (
-          <div className="mt-10 max-w-4xl mx-auto">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(e) => handleKnowledgeSelection(e.target.files)}
-            />
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className="swarm-panel-soft swarm-grid-backdrop swarm-hover-lift p-8 md:p-10 cursor-pointer"
-              style={{ borderStyle: 'dashed' }}
-            >
-              <div className="flex flex-col items-center text-center">
-                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full"
-                  style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
-                  <Upload size={18} />
+          <div className="mt-10 grid gap-5 xl:grid-cols-[1.02fr_0.98fr]">
+            <div className="space-y-5">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Linked files</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: knowledgeFiles.length > 0 ? 'var(--success)' : 'var(--text-primary)' }}>{knowledgeLabel}</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Screenshots, logs, specs, notes</div>
                 </div>
-                <div className="text-[20px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                  Add context files
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Directives</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: selectedDirectiveCount > 0 ? 'var(--accent)' : 'var(--text-primary)' }}>{selectedDirectiveCount}</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Mission guardrails enabled</div>
                 </div>
-                <div className="mt-2 max-w-lg text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
-                  Attach PDFs, logs, specs, screenshots, or notes to give the swarm a shared brain before launch.
+                <div className="premium-stat px-4 py-4">
+                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator notes</div>
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: contextNotes.trim() ? 'var(--success)' : 'var(--text-primary)' }}>
+                    {contextNotes.trim() ? 'Attached' : 'Optional'}
+                  </div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{contextNotes.trim().length} chars</div>
                 </div>
               </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => handleKnowledgeSelection(e.target.files)}
+              />
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="swarm-panel-soft swarm-grid-backdrop swarm-hover-lift p-8 md:p-10 cursor-pointer"
+                style={{ borderStyle: 'dashed' }}
+              >
+                <div className="flex flex-col items-center text-center">
+                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full"
+                    style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
+                    <Upload size={18} />
+                  </div>
+                  <div className="text-[20px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                    Add context files
+                  </div>
+                  <div className="mt-2 max-w-lg text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+                    Attach PDFs, logs, specs, screenshots, or notes to give the swarm a shared brain before launch.
+                  </div>
+                </div>
+              </div>
+
+              {knowledgeFiles.length > 0 && (
+                <div className="swarm-panel-soft p-5">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-4" style={{ color: 'var(--text-muted)' }}>
+                    Attached context
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {knowledgeFiles.map((file) => (
+                      <div key={file} className="flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all"
+                        style={{ borderColor: 'var(--border)', background: 'rgba(5,10,18,0.78)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)' }}>
+                        <BookOpen size={14} style={{ color: 'var(--accent)' }} />
+                        <div className="min-w-0 flex-1 text-[11px] font-mono truncate" style={{ color: 'var(--text-primary)' }}>{file}</div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setKnowledgeFiles((current) => current.filter((item) => item !== file))
+                          }}
+                          className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
-            {knowledgeFiles.length > 0 && (
-              <div className="mt-5 swarm-panel-soft p-5">
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-4" style={{ color: 'var(--text-muted)' }}>
-                  Attached context
+            <div className="space-y-5">
+              <div className="swarm-panel-soft p-5 md:p-6">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
+                      Mission directives
+                    </div>
+                    <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                      Operational guardrails
+                    </div>
+                  </div>
+                  <div className="premium-chip" style={{ color: 'var(--accent)' }}>
+                    <Workflow size={12} />
+                    {selectedDirectiveCount} selected
+                  </div>
                 </div>
-                <div className="grid gap-2 md:grid-cols-2">
-                  {knowledgeFiles.map((file) => (
-                    <div key={file} className="flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all"
-                      style={{ borderColor: 'var(--border)', background: 'rgba(5,10,18,0.78)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)' }}>
-                      <BookOpen size={14} style={{ color: 'var(--accent)' }} />
-                      <div className="min-w-0 flex-1 text-[11px] font-mono truncate" style={{ color: 'var(--text-primary)' }}>{file}</div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setKnowledgeFiles((current) => current.filter((item) => item !== file))
-                        }}
-                        className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]"
-                        style={{ color: 'var(--text-muted)' }}
-                      >
-                        <X size={12} />
-                      </button>
+
+                <div className="mt-5 space-y-4">
+                  {SWARM_SKILL_GROUPS.map((group) => (
+                    <div key={group}>
+                      <div className="text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>{group}</div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {SWARM_SKILLS.filter((skill) => skill.group === group).map((skill) => {
+                          const active = missionDirectives.includes(skill.id)
+
+                          return (
+                            <button
+                              key={skill.id}
+                              onClick={() => toggleMissionDirective(skill.id)}
+                              className="rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
+                              style={{
+                                borderColor: active ? 'rgba(79,140,255,0.34)' : 'var(--border)',
+                                background: active ? 'rgba(79,140,255,0.1)' : 'rgba(4,9,18,0.56)',
+                                boxShadow: active ? '0 16px 42px rgba(79,140,255,0.12)' : 'none',
+                              }}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{skill.title}</span>
+                                {active && <Check size={12} style={{ color: 'var(--accent)' }} />}
+                              </div>
+                              <div className="mt-2 text-[10px] leading-5" style={{ color: 'var(--text-secondary)' }}>{skill.description}</div>
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
-            )}
+
+              <div className="swarm-panel-soft p-5 md:p-6">
+                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
+                  Operator notes
+                </div>
+                <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                  Context only the operator should frame explicitly
+                </div>
+                <textarea
+                  value={contextNotes}
+                  onChange={(e) => setContextNotes(e.target.value)}
+                  placeholder="Add release constraints, non-obvious caveats, priorities, or review expectations..."
+                  className="mt-4 w-full min-h-[160px] rounded-[22px] border bg-[rgba(3,8,16,0.92)] px-5 py-4 text-[12px] leading-7 outline-none resize-none transition-all"
+                  style={{ borderColor: 'rgba(79,140,255,0.18)', color: 'var(--text-primary)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)' }}
+                />
+                <div className="mt-3 rounded-2xl px-4 py-3 text-[10px] leading-6" style={{ background: 'rgba(79,140,255,0.08)', color: 'var(--text-secondary)' }}>
+                  Notes are attached to the launch envelope so the active swarm can preserve operator intent, even when the brief is short.
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {step === 4 && (
+        {step === 0 && (
           <div className="mt-10 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
             <div className="swarm-panel-soft p-5 md:p-6">
               <div className="mb-5 grid gap-3 md:grid-cols-3">
@@ -650,12 +1059,32 @@ export function SwarmLaunch() {
                 </div>
                 <div className="premium-stat px-4 py-4">
                   <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission sync</div>
-                  <div className="mt-2 text-[13px] font-semibold" style={{ color: objective.trim() ? 'var(--success)' : 'var(--warning)' }}>
-                    {objective.trim() ? 'Aligned brief' : 'Awaiting brief'}
+                  <div className="mt-2 text-[13px] font-semibold" style={{ color: cliAvailabilitySummary.missing > 0 ? 'var(--warning)' : cliAvailabilitySummary.available > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
+                    {cliAvailabilitySummary.available} detected
                   </div>
-                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Tasks inherit the shared objective</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{cliAvailabilitySummary.missing} missing · {cliAvailabilitySummary.unverified} unverified</div>
                 </div>
               </div>
+              {unavailableSelectedClis.length > 0 && (
+                <div className="mb-5 rounded-2xl border px-4 py-3" style={{ borderColor: 'rgba(255,191,98,0.22)', background: 'rgba(255,191,98,0.08)' }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--warning)' }}>CLI readiness warning</div>
+                      <div className="mt-1 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+                        Selected roster includes unavailable CLIs: {unavailableSelectedClis.join(', ')}.
+                      </div>
+                    </div>
+                    {preferredAvailableCli && (
+                      <button
+                        onClick={() => handleGlobalCliChange(preferredAvailableCli)}
+                        className="btn-secondary text-[10px] px-4 py-2"
+                      >
+                        Use {preferredAvailableCli}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="text-[9px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: 'var(--text-muted)' }}>
                 Quick presets
               </div>
@@ -681,26 +1110,42 @@ export function SwarmLaunch() {
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-5">
                 {CLI_OPTIONS.map((option) => (
-                  <button
-                    key={option.id}
-                    onClick={() => handleGlobalCliChange(option.id)}
-                    className="rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
-                    style={{
-                      borderColor: globalCli === option.id ? 'rgba(79,140,255,0.38)' : 'var(--border)',
-                      background: globalCli === option.id ? 'rgba(79,140,255,0.1)' : 'rgba(4,9,18,0.56)',
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-xl"
-                        style={{ background: globalCli === option.id ? 'var(--accent)' : 'rgba(255,255,255,0.06)', color: globalCli === option.id ? '#04111d' : 'var(--text-secondary)' }}>
-                        <span className="text-[10px] font-bold">{option.short}</span>
-                      </div>
-                      <div>
-                        <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{option.label}</div>
-                        <div className="text-[9px] font-mono uppercase" style={{ color: 'var(--text-muted)' }}>{option.subtitle}</div>
-                      </div>
-                    </div>
-                  </button>
+                  (() => {
+                    const detectionMeta = getCliDetectionMeta(option.id)
+
+                    return (
+                      <button
+                        key={option.id}
+                        onClick={() => handleGlobalCliChange(option.id)}
+                        className="rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
+                        style={{
+                          borderColor: globalCli === option.id ? 'rgba(79,140,255,0.38)' : detectionMeta.color === 'var(--error)' ? 'rgba(255,71,87,0.22)' : 'var(--border)',
+                          background: globalCli === option.id ? 'rgba(79,140,255,0.1)' : 'rgba(4,9,18,0.56)',
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-xl"
+                            style={{ background: globalCli === option.id ? 'var(--accent)' : 'rgba(255,255,255,0.06)', color: globalCli === option.id ? '#04111d' : 'var(--text-secondary)' }}>
+                            <span className="text-[10px] font-bold">{option.short}</span>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{option.label}</div>
+                            <div className="text-[9px] font-mono uppercase" style={{ color: 'var(--text-muted)' }}>{option.subtitle}</div>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between">
+                          <span className="text-[8px] font-bold uppercase tracking-[0.14em]" style={{ color: detectionMeta.color }}>
+                            {detectionMeta.label}
+                          </span>
+                          {globalCli === option.id && (
+                            <span className="text-[8px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
+                              active
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    )
+                  })()
                 ))}
               </div>
 
@@ -718,6 +1163,7 @@ export function SwarmLaunch() {
                 {agents.map((agent, index) => {
                   const roleMeta = ROLE_OPTIONS.find((role) => role.id === agent.role) ?? ROLE_OPTIONS[0]
                   const cliMeta = CLI_OPTIONS.find((cli) => cli.id === agent.cli) ?? CLI_OPTIONS[0]
+                  const detectionMeta = getCliDetectionMeta(agent.cli)
 
                   return (
                     <button
@@ -739,6 +1185,9 @@ export function SwarmLaunch() {
                               {roleMeta.label}
                             </span>
                             <span className="text-[10px] font-mono uppercase" style={{ color: 'var(--text-muted)' }}>{cliMeta.label}</span>
+                            <span className="rounded-full px-2 py-1 text-[8px] font-bold uppercase tracking-[0.14em]" style={{ background: 'rgba(255,255,255,0.04)', color: detectionMeta.color }}>
+                              {detectionMeta.label}
+                            </span>
                             {agent.autoApprove && (
                               <span className="rounded-full px-2.5 py-1 text-[9px] font-semibold" style={{ background: 'rgba(46,213,115,0.12)', color: 'var(--success)' }}>
                                 Auto
@@ -804,6 +1253,9 @@ export function SwarmLaunch() {
                       <div className="mt-2 text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>
                         {selectedCliMeta?.label || selectedAgent.cli}
                       </div>
+                      <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: getCliDetectionMeta(selectedAgent.cli).color }}>
+                        {getCliDetectionMeta(selectedAgent.cli).label}
+                      </div>
                     </div>
                   </div>
 
@@ -839,7 +1291,7 @@ export function SwarmLaunch() {
                         return (
                           <button
                             key={role.id}
-                            onClick={() => updateAgent(selectedAgent.id, { role: role.id, task: selectedAgent.task.trim() || getTaskTemplate(role.id, objective) })}
+                            onClick={() => updateAgent(selectedAgent.id, { role: role.id, task: resolveTaskForRole(selectedAgent, role.id) })}
                             className="rounded-2xl border px-3 py-3 text-left transition-all swarm-hover-lift"
                             style={{
                               borderColor: selectedAgent.role === role.id ? `${role.color}66` : 'var(--border)',
@@ -1098,9 +1550,11 @@ export function SwarmLaunch() {
               <div className="mt-1 text-[10px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>{workDir || 'Awaiting directory'}</div>
             </div>
             <div className="premium-stat px-4 py-4">
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Shared knowledge</div>
-              <div className="mt-2 text-[13px] font-semibold" style={{ color: knowledgeFiles.length > 0 ? 'var(--success)' : 'var(--text-primary)' }}>{knowledgeLabel}</div>
-              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Specs, logs, screenshots, and references</div>
+              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Context envelope</div>
+              <div className="mt-2 text-[13px] font-semibold" style={{ color: knowledgeFiles.length > 0 || selectedDirectiveCount > 0 || contextNotes.trim() ? 'var(--success)' : 'var(--text-primary)' }}>
+                {knowledgeLabel}
+              </div>
+              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{selectedDirectiveCount} directives · {contextNotes.trim() ? 'notes linked' : 'no notes'}</div>
             </div>
             <div className="premium-stat px-4 py-4">
               <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Fleet posture</div>

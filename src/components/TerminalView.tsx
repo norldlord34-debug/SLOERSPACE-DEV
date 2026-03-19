@@ -1,6 +1,28 @@
 'use client'
 
-import { formatCommandDuration, runTerminalCommand, openFolderDialog, cancelRunningCommand, getGitBranch, getSystemInfo, SystemInfo } from '@/lib/desktop'
+import {
+  formatCommandDuration,
+  openFolderDialog,
+  cancelRunningCommand,
+  getGitBranch,
+  getSystemInfo,
+  getTerminalCapabilities,
+  inspectWorkingDirectory,
+  ensureTerminalSession,
+  getTerminalSessionEvents,
+  listenToTerminalSessionLiveEvents,
+  listenToTerminalSessionStreamEvents,
+  getTerminalSessionSnapshot,
+  runTerminalSessionCommand,
+  resizeTerminalSession,
+  writeTerminalSessionInput,
+  startPtyStream,
+  closeTerminalSession,
+  SystemInfo,
+  TerminalCapabilities,
+  TerminalSessionEvent,
+  WorkingDirectoryInsight,
+} from '@/lib/desktop'
 import { useStore, CommandBlock, TerminalPane, generateId } from '@/store/useStore'
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import {
@@ -10,7 +32,7 @@ import {
   Maximize2, Minimize2, Columns2, Square, Grid2x2,
   ChevronLeft, Search, Sparkles, FolderOpen,
   FileDown, ZoomIn, ZoomOut, X, StopCircle,
-  GitBranch, Lock,
+  GitBranch, Lock, Star, Workflow, Cpu, ShieldCheck, BookOpen,
   Clipboard
 } from 'lucide-react'
 
@@ -20,6 +42,14 @@ type ViewMode = 'focus' | 'split' | 'quad' | 'grid'
 
 interface AnsiSpan { text: string; style: React.CSSProperties }
 
+interface LiveCommandBlockState {
+  commandId: string | null
+  command: string
+  output: string
+  startedAtMs: number
+  baselineCommandCount: number
+}
+
 /* ── Helpers ─────────────────────────────────────────────────── */
 
 function getErrorMessage(error: unknown) {
@@ -28,13 +58,17 @@ function getErrorMessage(error: unknown) {
 }
 
 function formatCommandOutput(stdout: string, stderr: string) {
-  const sections = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean)
+  const sections = [sanitizeTerminalOutput(stdout).trimEnd(), sanitizeTerminalOutput(stderr).trimEnd()].filter(Boolean)
   return sections.length === 0 ? 'Command completed with no output.' : sections.join('\n\n')
 }
 
 function getPaneLabel(pane: TerminalPane) {
   if (pane.label) return pane.label
   return pane.cwd.split(/[\\/]/).filter(Boolean).pop() ?? pane.cwd
+}
+
+function getPaneSessionKind(pane: TerminalPane) {
+  return pane.sessionKind ?? 'local'
 }
 
 function getTimeAgo(timestamp: string) {
@@ -93,6 +127,13 @@ function getFriendlyShellName(shell?: string | null) {
   return shell
 }
 
+function getShellKindLabel(shellKind?: TerminalPane['shellKind'] | null) {
+  if (shellKind === 'powershell') return 'PowerShell'
+  if (shellKind === 'command-prompt') return 'Command Prompt'
+  if (shellKind === 'git-bash') return 'Git Bash'
+  return null
+}
+
 function getFriendlyOsName(os?: string | null) {
   if (!os) return 'Desktop'
   if (os === 'windows') return 'Windows'
@@ -127,6 +168,21 @@ function getPromptPreview(cwd: string, shellName: string) {
 
 const URL_REGEX = /https?:\/\/[^\s<>"']+/g
 
+const INTERACTIVE_CLI_COMMANDS = new Set([
+  'opencode', 'claude', 'codex', 'gemini', 'cursor',
+  'vim', 'nvim', 'nano', 'vi', 'emacs', 'less', 'more', 'top', 'htop', 'btop',
+  'python', 'python3', 'node', 'irb', 'ghci', 'lua', 'julia',
+  'ssh', 'telnet', 'ftp', 'sftp',
+  'mysql', 'psql', 'mongo', 'mongosh', 'redis-cli',
+  'nix-shell', 'bash', 'zsh', 'fish', 'sh', 'pwsh', 'powershell', 'cmd',
+])
+
+function isInteractiveCommand(command: string): boolean {
+  const base = command.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+  const name = base.split(/[\\/]/).pop()?.replace(/\.exe$/i, '') ?? base
+  return INTERACTIVE_CLI_COMMANDS.has(name)
+}
+
 const COMMON_COMMANDS = [
   'ls', 'dir', 'cd', 'pwd', 'cat', 'echo', 'mkdir', 'rm', 'cp', 'mv',
   'git status', 'git log --oneline -10', 'git diff', 'git branch', 'git pull', 'git push',
@@ -142,6 +198,15 @@ const COMMON_COMMANDS = [
 
 const EMPTY_COMMAND_HISTORY: string[] = []
 
+function buildSnippetName(command: string) {
+  const compact = command.trim().replace(/\s+/g, ' ')
+  if (compact.length <= 30) {
+    return compact
+  }
+
+  return `${compact.slice(0, 27)}...`
+}
+
 /* ── ANSI escape code parser ─────────────────────────────────── */
 
 const ANSI_COLORS_FG: Record<number, string> = {
@@ -153,15 +218,16 @@ const ANSI_COLORS_BG: Record<number, string> = {
 }
 
 function parseAnsiSpans(raw: string): AnsiSpan[] {
+  const sanitized = sanitizeTerminalOutput(raw)
   const spans: AnsiSpan[] = []
   let style: React.CSSProperties = {}
   const regex = /\x1b\[([0-9;]*)m/g
   let lastIdx = 0
   let match: RegExpExecArray | null
 
-  while ((match = regex.exec(raw)) !== null) {
+  while ((match = regex.exec(sanitized)) !== null) {
     if (match.index > lastIdx) {
-      spans.push({ text: raw.slice(lastIdx, match.index), style: { ...style } })
+      spans.push({ text: sanitized.slice(lastIdx, match.index), style: { ...style } })
     }
     const codes = match[1].split(';').map(Number)
     for (let i = 0; i < codes.length; i++) {
@@ -188,7 +254,7 @@ function parseAnsiSpans(raw: string): AnsiSpan[] {
     }
     lastIdx = regex.lastIndex
   }
-  if (lastIdx < raw.length) spans.push({ text: raw.slice(lastIdx), style: { ...style } })
+  if (lastIdx < sanitized.length) spans.push({ text: sanitized.slice(lastIdx), style: { ...style } })
   return spans
 }
 
@@ -209,8 +275,20 @@ function ansi256ToHex(n: number): string {
   return `rgb(${v},${v},${v})`
 }
 
+function sanitizeTerminalOutput(raw: string): string {
+  let cleaned = raw
+  cleaned = cleaned.replace(/\x1b\[\?[0-9;]*[a-zA-Z]/g, '')
+  cleaned = cleaned.replace(/\x1b\[[0-9;]*[ABCDEFGHJKSTfnsu]/g, '')
+  cleaned = cleaned.replace(/\x1b\([A-Z0-9]/g, '')
+  cleaned = cleaned.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+  cleaned = cleaned.replace(/\x1b[=>NOcZ78]/g, '')
+  cleaned = cleaned.replace(/\r(?!\n)/g, '')
+  cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n')
+  return cleaned
+}
+
 function stripAnsi(raw: string): string {
-  return raw.replace(/\x1b\[[0-9;]*m/g, '')
+  return raw.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b[\(\)][A-Z0-9]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b[=>NOcZ78]/g, '')
 }
 
 /* ── Fuzzy match ─────────────────────────────────────────────── */
@@ -295,7 +373,23 @@ const OutputRenderer = React.memo(function OutputRenderer({ text }: { text: stri
 
 const MAX_VISIBLE_LINES = 80
 
-const CommandBlockUI = React.memo(function CommandBlockUI({ block, onToggle, onRerun }: { block: CommandBlock; onToggle: () => void; onRerun?: (cmd: string) => void }) {
+const CommandBlockUI = React.memo(function CommandBlockUI({
+  block,
+  onToggle,
+  onRerun,
+  onToggleStar,
+  onSaveSnippet,
+  isStarred,
+  compactMode = false,
+}: {
+  block: CommandBlock
+  onToggle: () => void
+  onRerun?: (cmd: string) => void
+  onToggleStar?: (cmd: string) => void
+  onSaveSnippet?: (cmd: string) => void
+  isStarred?: boolean
+  compactMode?: boolean
+}) {
   const ok = block.exitCode === 0
   const [copied, setCopied] = useState(false)
   const [copiedCmd, setCopiedCmd] = useState(false)
@@ -341,7 +435,7 @@ const CommandBlockUI = React.memo(function CommandBlockUI({ block, onToggle, onR
     >
       {/* Command header - Warp-style block */}
       <div
-        className="flex items-center gap-2.5 px-5 py-3 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.025)]"
+        className={`flex items-center gap-2.5 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.025)] ${compactMode ? 'px-3 py-2' : 'px-5 py-3'}`}
         onClick={onToggle}
       >
         <button className="shrink-0 w-4 h-4 flex items-center justify-center rounded transition-colors" style={{ color: 'var(--text-muted)' }}>
@@ -357,7 +451,7 @@ const CommandBlockUI = React.memo(function CommandBlockUI({ block, onToggle, onR
 
         <div className="flex items-center gap-2.5 shrink-0">
           {/* Re-run */}
-          {onRerun && (
+          {onRerun && !compactMode && (
             <button
               onClick={(e) => { e.stopPropagation(); onRerun(rawCommand) }}
               className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all hover:bg-[var(--surface-3)]"
@@ -367,42 +461,62 @@ const CommandBlockUI = React.memo(function CommandBlockUI({ block, onToggle, onR
               <CornerDownLeft size={12} />
             </button>
           )}
+          {onToggleStar && !compactMode && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleStar(rawCommand) }}
+              className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all hover:bg-[var(--surface-3)]"
+              title={isStarred ? 'Remove from favorites' : 'Add to favorites'}
+              style={{ color: isStarred ? 'var(--warning)' : 'var(--text-muted)' }}
+            >
+              <Star size={12} fill={isStarred ? 'currentColor' : 'none'} />
+            </button>
+          )}
+          {onSaveSnippet && !compactMode && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onSaveSnippet(rawCommand) }}
+              className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all hover:bg-[var(--surface-3)]"
+              title="Save as workflow snippet"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              <Workflow size={12} />
+            </button>
+          )}
           {/* Copy command */}
-          <button
+          {!compactMode && <button
             onClick={handleCopyCommand}
             className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all hover:bg-[var(--surface-3)]"
             title="Copy command"
             style={{ color: copiedCmd ? 'var(--success)' : 'var(--text-muted)' }}
           >
             {copiedCmd ? <Check size={12} /> : <Hash size={12} />}
-          </button>
+          </button>}
           {/* Copy output */}
-          <button
+          {!compactMode && <button
             onClick={handleCopyOutput}
             className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all hover:bg-[var(--surface-3)]"
             title="Copy output"
             style={{ color: copied ? 'var(--success)' : 'var(--text-muted)' }}
           >
             {copied ? <Check size={12} /> : <Copy size={12} />}
-          </button>
+          </button>}
           {/* Line numbers toggle */}
-          <button
+          {!compactMode && <button
             onClick={(e) => { e.stopPropagation(); setShowLineNumbers(!showLineNumbers) }}
             className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all hover:bg-[var(--surface-3)]"
             title={showLineNumbers ? 'Hide line numbers' : 'Show line numbers'}
             style={{ color: showLineNumbers ? 'var(--accent)' : 'var(--text-muted)' }}
           >
             <Hash size={12} />
-          </button>
+          </button>}
           {/* Export as markdown */}
-          <button
+          {!compactMode && <button
             onClick={handleExportMarkdown}
             className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all hover:bg-[var(--surface-3)]"
             title="Copy as Markdown"
             style={{ color: 'var(--text-muted)' }}
           >
             <FileDown size={12} />
-          </button>
+          </button>}
 
           {/* Exit code badge */}
           {!ok && (
@@ -412,24 +526,24 @@ const CommandBlockUI = React.memo(function CommandBlockUI({ block, onToggle, onR
           )}
 
           {/* Duration */}
-          <span className="text-[10px] font-mono flex items-center gap-1 px-2 py-1 rounded-md" style={{ color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)' }}>
+          {!compactMode && <span className="text-[10px] font-mono flex items-center gap-1 px-2 py-1 rounded-md" style={{ color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)' }}>
             <Clock size={9} /> {block.duration}
-          </span>
+          </span>}
 
           {/* Line count */}
-          <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
+          {!compactMode && <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
             {outputLines}L
-          </span>
+          </span>}
 
           {/* Time */}
-          <span className="hidden md:inline text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{getTimeAgo(block.timestamp)}</span>
+          {!compactMode && <span className="hidden md:inline text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{getTimeAgo(block.timestamp)}</span>}
         </div>
       </div>
 
       {/* Output body */}
       {!block.isCollapsed && (
         <div
-          className="px-5 py-3.5 ml-[30px] mr-3 mb-3 rounded-xl transition-all"
+          className={`rounded-xl transition-all ${compactMode ? 'px-3 py-2.5 ml-[18px] mr-2 mb-2' : 'px-5 py-3.5 ml-[30px] mr-3 mb-3'}`}
           style={{
             background: 'rgba(2,6,14,0.65)',
             borderLeft: `2px solid ${ok ? 'rgba(46,213,115,0.25)' : 'rgba(255,71,87,0.25)'}`,
@@ -518,6 +632,288 @@ const WelcomeMessage = React.memo(function WelcomeMessage({ cwd, shellName, osNa
   )
 })
 
+/* ── PTY Terminal Emulator (xterm.js) ────────────────────────── */
+
+const SLOERSPACE_TERMINAL_THEME = {
+  background: '#0b1120',
+  foreground: '#cdd6f4',
+  cursor: '#4f8cff',
+  cursorAccent: '#0b1120',
+  selectionBackground: 'rgba(79,140,255,0.38)',
+  selectionForeground: '#ffffff',
+  selectionInactiveBackground: 'rgba(79,140,255,0.15)',
+  black: '#45475a',
+  red: '#f38ba8',
+  green: '#a6e3a1',
+  yellow: '#f9e2af',
+  blue: '#89b4fa',
+  magenta: '#cba6f7',
+  cyan: '#94e2d5',
+  white: '#bac2de',
+  brightBlack: '#585b70',
+  brightRed: '#f38ba8',
+  brightGreen: '#a6e3a1',
+  brightYellow: '#f9e2af',
+  brightBlue: '#89b4fa',
+  brightMagenta: '#cba6f7',
+  brightCyan: '#94e2d5',
+  brightWhite: '#ffffff',
+}
+
+const PtyTerminalEmulator = React.memo(function PtyTerminalEmulator({
+  sessionId,
+  cwd,
+  paneIndex = 0,
+  totalPanes = 1,
+  onExit,
+}: {
+  sessionId: string
+  cwd: string
+  paneIndex?: number
+  totalPanes?: number
+  onExit?: () => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const xtermRef = useRef<import('@xterm/xterm').Terminal | null>(null)
+  const fitAddonRef = useRef<import('@xterm/addon-fit').FitAddon | null>(null)
+  const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const disposedRef = useRef(false)
+  const [rendererType, setRendererType] = useState<'webgl' | 'canvas'>('canvas')
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    disposedRef.current = false
+
+    let terminal: import('@xterm/xterm').Terminal | null = null
+    let fitAddon: import('@xterm/addon-fit').FitAddon | null = null
+    let webglAddon: import('@xterm/addon-webgl').WebglAddon | null = null
+    let streamUnlisten: (() => void) | null = null
+    let resizeFrameId: number | null = null
+    let writeBuffer: string[] = []
+    let writeFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+    const flushWriteBuffer = () => {
+      writeFlushTimer = null
+      if (!terminal || disposedRef.current || writeBuffer.length === 0) return
+      const batch = writeBuffer.join('')
+      writeBuffer = []
+      terminal.write(batch)
+    }
+
+    const queueWrite = (chunk: string) => {
+      if (!terminal || disposedRef.current) return
+      if (writeBuffer.length === 0 && !writeFlushTimer) {
+        terminal.write(chunk)
+        return
+      }
+      writeBuffer.push(chunk)
+      if (!writeFlushTimer) {
+        writeFlushTimer = setTimeout(flushWriteBuffer, 4)
+      }
+    }
+
+    const doFitAndResize = () => {
+      if (!fitAddon || !terminal || disposedRef.current) return
+      try {
+        fitAddon.fit()
+        void resizeTerminalSession(sessionId, terminal.cols, terminal.rows)
+      } catch { /* ignore during transitions */ }
+    }
+
+    const init = async () => {
+      if (paneIndex > 0) {
+        await new Promise((r) => setTimeout(r, paneIndex * 120))
+      }
+      if (disposedRef.current) return
+
+      const [{ Terminal }, { FitAddon }, { Unicode11Addon }, { listen }] = await Promise.all([
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
+        import('@xterm/addon-unicode11'),
+        import('@tauri-apps/api/event'),
+      ])
+
+      if (disposedRef.current || !containerRef.current) return
+
+      terminal = new Terminal({
+        cursorBlink: true,
+        cursorStyle: 'bar',
+        cursorWidth: 2,
+        fontSize: 14,
+        fontFamily: "'CaskaydiaCove Nerd Font', 'FiraCode Nerd Font', Consolas, 'Cascadia Code', 'JetBrains Mono', 'Courier New', monospace",
+        fontWeight: '400',
+        fontWeightBold: '600',
+        lineHeight: 1.15,
+        letterSpacing: 0,
+        drawBoldTextInBrightColors: true,
+        minimumContrastRatio: 1,
+        theme: SLOERSPACE_TERMINAL_THEME,
+        allowProposedApi: true,
+        scrollback: 50000,
+        smoothScrollDuration: 100,
+        convertEol: false,
+        altClickMovesCursor: true,
+        rightClickSelectsWord: true,
+        macOptionIsMeta: true,
+        scrollOnUserInput: true,
+      })
+
+      fitAddon = new FitAddon()
+      terminal.loadAddon(fitAddon)
+
+      const unicode11 = new Unicode11Addon()
+      terminal.loadAddon(unicode11)
+      terminal.unicode.activeVersion = '11'
+
+      terminal.open(containerRef.current!)
+
+      if (totalPanes <= 2) {
+        try {
+          const { WebglAddon } = await import('@xterm/addon-webgl')
+          webglAddon = new WebglAddon()
+          webglAddon.onContextLoss(() => {
+            webglAddon?.dispose()
+            webglAddon = null
+            setRendererType('canvas')
+          })
+          terminal.loadAddon(webglAddon)
+          setRendererType('webgl')
+        } catch {
+          setRendererType('canvas')
+        }
+      } else {
+        setRendererType('canvas')
+      }
+
+      fitAddon.fit()
+      xtermRef.current = terminal
+      fitAddonRef.current = fitAddon
+
+      terminal.onData((data) => {
+        void writeTerminalSessionInput(sessionId, data)
+      })
+
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (event.type !== 'keydown') return true
+        if (event.ctrlKey && event.shiftKey && event.key === 'C') {
+          const sel = terminal?.getSelection()
+          if (sel) navigator.clipboard.writeText(sel)
+          return false
+        }
+        if (event.ctrlKey && event.shiftKey && event.key === 'V') {
+          navigator.clipboard.readText().then((text) => {
+            if (text) void writeTerminalSessionInput(sessionId, text)
+          }).catch(() => {})
+          return false
+        }
+        return true
+      })
+
+      terminal.onResize(({ cols, rows }) => {
+        void resizeTerminalSession(sessionId, cols, rows)
+      })
+
+      const unlisten = await listen<{ sessionId: string; commandId: string | null; chunk: string; sequence: number }>(
+        'terminal-session-stream',
+        (event) => {
+          if (event.payload.sessionId === sessionId && !disposedRef.current) {
+            queueWrite(event.payload.chunk)
+          }
+        },
+      )
+      streamUnlisten = unlisten
+
+      if (disposedRef.current) { unlisten(); terminal.dispose(); return }
+
+      await ensureTerminalSession(sessionId, cwd).catch(() => {})
+
+      if (disposedRef.current) { unlisten(); terminal.dispose(); return }
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        if (disposedRef.current) break
+        const started = await startPtyStream(sessionId).catch(() => false)
+        if (started) break
+        await new Promise((r) => setTimeout(r, 200))
+      }
+
+      if (disposedRef.current) { unlisten(); terminal.dispose(); return }
+
+      void resizeTerminalSession(sessionId, terminal.cols, terminal.rows)
+
+      const resizeObserver = new ResizeObserver(() => {
+        if (resizeFrameId !== null) cancelAnimationFrame(resizeFrameId)
+        resizeFrameId = requestAnimationFrame(doFitAndResize)
+      })
+      if (containerRef.current) resizeObserver.observe(containerRef.current)
+      resizeObserverRef.current = resizeObserver
+
+      terminal.focus()
+    }
+
+    void init()
+
+    return () => {
+      disposedRef.current = true
+      if (resizeFrameId !== null) cancelAnimationFrame(resizeFrameId)
+      if (writeFlushTimer !== null) clearTimeout(writeFlushTimer)
+      resizeObserverRef.current?.disconnect()
+      resizeObserverRef.current = null
+      streamUnlisten?.()
+      webglAddon?.dispose()
+      terminal?.dispose()
+      xtermRef.current = null
+      fitAddonRef.current = null
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, cwd])
+
+  const handleCopy = () => {
+    const sel = xtermRef.current?.getSelection()
+    if (sel) navigator.clipboard.writeText(sel)
+  }
+
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text) void writeTerminalSessionInput(sessionId, text)
+    } catch { /* clipboard access denied */ }
+  }
+
+  const handleClear = () => {
+    void writeTerminalSessionInput(sessionId, '\x0c')
+  }
+
+  return (
+    <div className="flex flex-col h-full w-full min-h-0">
+      <div className="flex items-center justify-between px-3 py-1 shrink-0" style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#a6e3a1', boxShadow: '0 0 6px rgba(166,227,161,0.5)' }} />
+          <span className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
+            PTY · {rendererType === 'webgl' ? 'GPU' : 'Canvas'}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <button onClick={handleCopy} className="p-1 rounded transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Copy (Ctrl+Shift+C)" style={{ color: 'var(--text-muted)' }}>
+            <Copy size={10} />
+          </button>
+          <button onClick={handlePaste} className="p-1 rounded transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Paste (Ctrl+Shift+V)" style={{ color: 'var(--text-muted)' }}>
+            <Clipboard size={10} />
+          </button>
+          <button onClick={handleClear} className="p-1 rounded transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Clear (Ctrl+L)" style={{ color: 'var(--text-muted)' }}>
+            <Trash2 size={10} />
+          </button>
+          {onExit && (
+            <button onClick={onExit} className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded transition-all hover:bg-[rgba(255,255,255,0.06)] ml-1" style={{ color: 'var(--text-muted)' }}>
+              Blocks
+            </button>
+          )}
+        </div>
+      </div>
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-hidden" style={{ background: SLOERSPACE_TERMINAL_THEME.background }} />
+    </div>
+  )
+})
+
 /* ── Running Indicator ───────────────────────────────────────── */
 
 function RunningIndicator({ paneId }: { paneId: string }) {
@@ -547,10 +943,256 @@ function RunningIndicator({ paneId }: { paneId: string }) {
   )
 }
 
+const LiveCommandBlockUI = React.memo(function LiveCommandBlockUI({
+  command,
+  output,
+  startedAtMs,
+  compactMode = false,
+}: {
+  command: string
+  output: string
+  startedAtMs: number
+  compactMode?: boolean
+}) {
+  const [elapsedMs, setElapsedMs] = useState(() => Math.max(0, Date.now() - startedAtMs))
+
+  useEffect(() => {
+    setElapsedMs(Math.max(0, Date.now() - startedAtMs))
+    const timer = setInterval(() => {
+      setElapsedMs(Math.max(0, Date.now() - startedAtMs))
+    }, 100)
+    return () => clearInterval(timer)
+  }, [startedAtMs])
+
+  const displayText = output.trimEnd()
+
+  return (
+    <div
+      className="overflow-hidden transition-all duration-150"
+      style={{
+        background: 'rgba(6,12,22,0.5)',
+        borderBottom: '1px solid rgba(255,255,255,0.04)',
+      }}
+    >
+      <div
+        className={`flex items-center gap-2.5 ${compactMode ? 'px-3 py-2' : 'px-5 py-3'}`}
+        style={{ background: 'rgba(255,255,255,0.018)' }}
+      >
+        <div className="flex gap-1.5 shrink-0">
+          <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--accent)', animationDelay: '0ms' }} />
+          <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--accent)', animationDelay: '150ms' }} />
+          <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--accent)', animationDelay: '300ms' }} />
+        </div>
+
+        <span className="font-mono text-[13px] flex-1 font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+          <span style={{ color: 'var(--accent)', opacity: 0.6 }}>$ </span>
+          {command}
+        </span>
+
+        <div className="flex items-center gap-2.5 shrink-0">
+          <span className="text-[9px] font-bold font-mono px-2 py-1 rounded-md" style={{ background: 'rgba(79,140,255,0.14)', color: 'var(--accent)' }}>
+            LIVE
+          </span>
+          {!compactMode && <span className="text-[10px] font-mono flex items-center gap-1 px-2 py-1 rounded-md" style={{ color: 'var(--warning)', background: 'rgba(255,191,98,0.1)' }}>
+            <Clock size={9} /> {formatCommandDuration(elapsedMs)}
+          </span>}
+        </div>
+      </div>
+
+      {displayText ? (
+        <div
+          className={`rounded-xl transition-all ${compactMode ? 'px-3 py-2.5 ml-[18px] mr-2 mb-2' : 'px-5 py-3.5 ml-[30px] mr-3 mb-3'}`}
+          style={{
+            background: 'rgba(2,6,14,0.65)',
+            borderLeft: '2px solid rgba(79,140,255,0.28)',
+          }}
+        >
+          <OutputRenderer text={displayText} />
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
+function getProjectTypeLabel(projectType?: string | null) {
+  if (!projectType) return 'Workspace'
+  if (projectType === 'node') return 'Node'
+  if (projectType === 'rust') return 'Rust'
+  if (projectType === 'python') return 'Python'
+  if (projectType === 'go') return 'Go'
+  if (projectType === 'containers') return 'Containers'
+  return 'Workspace'
+}
+
+function getSessionEventTone(kind: string) {
+  if (kind === 'command-finished') return '#a6e3a1'
+  if (kind === 'command-started') return 'var(--accent)'
+  if (kind === 'cwd-changed') return 'var(--warning)'
+  if (kind === 'command-cancelled' || kind === 'cancel-requested') return 'var(--warning)'
+  if (kind === 'command-error' || kind === 'command-timed-out') return 'var(--error)'
+  return 'var(--text-secondary)'
+}
+
+function getSessionEventIcon(kind: string) {
+  const color = getSessionEventTone(kind)
+
+  if (kind === 'command-started') return <Activity size={11} style={{ color }} />
+  if (kind === 'cwd-changed') return <FolderOpen size={11} style={{ color }} />
+  if (kind === 'command-finished') return <Check size={11} style={{ color }} />
+  if (kind === 'command-cancelled' || kind === 'cancel-requested') return <StopCircle size={11} style={{ color }} />
+  if (kind === 'command-error' || kind === 'command-timed-out') return <X size={11} style={{ color }} />
+  return <Terminal size={11} style={{ color }} />
+}
+
+function formatSessionEventTimestamp(timestampMs: number) {
+  return new Date(timestampMs).toLocaleTimeString()
+}
+
+const CommandDockGroup = React.memo(function CommandDockGroup({
+  title,
+  icon,
+  items,
+  accent,
+  onSelect,
+}: {
+  title: string
+  icon: React.ReactNode
+  items: Array<{ id: string; label: string; command: string; reason?: string }>
+  accent: string
+  onSelect: (command: string) => void
+}) {
+  if (items.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
+        <span className="inline-flex items-center" style={{ color: accent }}>{icon}</span>
+        {title}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => onSelect(item.command)}
+            className="group rounded-xl px-3 py-2 text-left transition-all hover:-translate-y-[1px]"
+            style={{
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.06)',
+            }}
+            title={item.reason ? `${item.command}\n\n${item.reason}` : item.command}
+          >
+            <div className="text-[10px] font-semibold transition-colors group-hover:text-[var(--text-primary)]" style={{ color: 'var(--text-secondary)' }}>
+              {item.label}
+            </div>
+            <div className="mt-1 font-mono text-[9px] truncate max-w-[220px]" style={{ color: 'var(--text-muted)' }}>
+              {item.command}
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+})
+
 /* ── Terminal Pane (memoized) ────────────────────────────────── */
 
-const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaximize, isMaximized, isFocused, broadcastPanes, shellName, osName, onActivate }: {
+const SessionTimelinePanel = React.memo(function SessionTimelinePanel({
+  events,
+  onSelectCommand,
+}: {
+  events: TerminalSessionEvent[]
+  onSelectCommand: (command: string) => void
+}) {
+  if (events.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
+          <span className="inline-flex items-center" style={{ color: 'var(--accent)' }}>
+            <Activity size={11} />
+          </span>
+          Session Activity
+        </div>
+        <span className="text-[8px] font-mono" style={{ color: 'var(--text-muted)' }}>
+          {events.length} events
+        </span>
+      </div>
+      <div className="grid gap-1.5">
+        {events.map((event) => {
+          const tone = getSessionEventTone(event.kind)
+          const hasCommand = Boolean(event.command)
+          const inner = (
+            <div className="flex items-start gap-2 w-full">
+              <div className="mt-0.5 shrink-0">
+                {getSessionEventIcon(event.kind)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                    {event.message}
+                  </div>
+                  <span className="shrink-0 text-[8px] font-mono" style={{ color: 'var(--text-muted)' }}>
+                    {formatSessionEventTimestamp(event.timestampMs)}
+                  </span>
+                </div>
+                <div className="mt-1 font-mono text-[9px] truncate" style={{ color: hasCommand ? tone : 'var(--text-muted)' }}>
+                  {event.command || event.cwd}
+                </div>
+                {(event.durationMs !== null || event.exitCode !== null) && (
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {event.durationMs !== null && (
+                      <span className="rounded-md px-1.5 py-0.5 text-[8px] font-mono" style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' }}>
+                        {formatCommandDuration(event.durationMs)}
+                      </span>
+                    )}
+                    {event.exitCode !== null && (
+                      <span className="rounded-md px-1.5 py-0.5 text-[8px] font-mono" style={{ background: event.exitCode === 0 ? 'rgba(166,227,161,0.08)' : 'rgba(255,71,87,0.08)', color: event.exitCode === 0 ? '#a6e3a1' : 'var(--error)' }}>
+                        exit {event.exitCode}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+
+          if (hasCommand && event.command) {
+            return (
+              <button
+                key={event.id}
+                onClick={() => onSelectCommand(event.command!)}
+                className="rounded-xl px-3 py-2 text-left transition-all hover:-translate-y-[1px]"
+                style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
+                title={`Reuse command: ${event.command}`}
+              >
+                {inner}
+              </button>
+            )
+          }
+
+          return (
+            <div
+              key={event.id}
+              className="rounded-xl px-3 py-2"
+              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
+            >
+              {inner}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+})
+
+const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, paneIndex = 0, isOnly, onMaximize, isMaximized, isFocused, broadcastPanes, shellName, osName, capabilities, onActivate, compactMode = false }: {
   pane: TerminalPane
+  paneIndex?: number
   isOnly: boolean
   onMaximize: () => void
   isMaximized: boolean
@@ -558,19 +1200,30 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
   broadcastPanes?: TerminalPane[]
   shellName: string
   osName: string
+  capabilities?: TerminalCapabilities | null
   onActivate?: () => void
+  compactMode?: boolean
 }) {
   const addCommandBlock = useStore((s) => s.addCommandBlock)
   const toggleCommandCollapse = useStore((s) => s.toggleCommandCollapse)
   const setPaneWorkingDirectory = useStore((s) => s.setPaneWorkingDirectory)
   const clearPaneCommands = useStore((s) => s.clearPaneCommands)
   const setPaneRunning = useStore((s) => s.setPaneRunning)
+  const setPaneRuntimeSession = useStore((s) => s.setPaneRuntimeSession)
   const addToCommandHistory = useStore((s) => s.addToCommandHistory)
   const commandAliases = useStore((s) => s.commandAliases)
+  const starredCommands = useStore((s) => s.starredCommands)
+  const commandSnippets = useStore((s) => s.commandSnippets)
+  const pendingTerminalCommand = useStore((s) => s.pendingTerminalCommand)
+  const consumePendingTerminalCommand = useStore((s) => s.consumePendingTerminalCommand)
+  const toggleStarCommand = useStore((s) => s.toggleStarCommand)
+  const addCommandSnippet = useStore((s) => s.addCommandSnippet)
+  const markPaneShellBootstrapped = useStore((s) => s.markPaneShellBootstrapped)
 
   const [input, setInput] = useState('')
   const [focused, setFocused] = useState(false)
   const [running, setRunning] = useState(false)
+  const [ptyMode, setPtyMode] = useState(true)
   const [cdInput, setCdInput] = useState('')
   const [showCdBar, setShowCdBar] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -581,6 +1234,10 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
   const runningRef = useRef(false)
   const executionTokenRef = useRef<string | null>(null)
   const previousCommandCountRef = useRef(pane.commands.length)
+  const commandCountRef = useRef(pane.commands.length)
+  const liveStreamSequenceRef = useRef(0)
+  const expectedLiveCommandIdRef = useRef<string | null>(null)
+  const runtimeLastCommandRef = useRef<string | null>(pane.runtimeSession?.lastCommand ?? null)
   const suggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [fontSize, setFontSize] = useState(12)
   const [filter, setFilter] = useState<'all' | 'success' | 'errors'>('all')
@@ -588,20 +1245,67 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
   const [showSearch, setShowSearch] = useState(false)
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [insight, setInsight] = useState<WorkingDirectoryInsight | null>(null)
+  const [sessionEvents, setSessionEvents] = useState<TerminalSessionEvent[]>([])
+  const [liveCommandBlock, setLiveCommandBlock] = useState<LiveCommandBlockState | null>(null)
   const activeCommandId = useRef<string | null>(null)
   const persistedHistory = useMemo(() => pane.commandHistory ?? EMPTY_COMMAND_HISTORY, [pane.commandHistory])
+  const runtimeSessionId = pane.runtimeSessionId ?? pane.id
+  const runtimeSessionLabel = pane.label?.trim() || getPaneLabel(pane)
+  const runtimeSessionKind = getPaneSessionKind(pane)
+  const runtimeSession = pane.runtimeSession
+  const runtimeBackendKind = runtimeSession?.backendKind ?? capabilities?.backendKind ?? 'persistent-pty'
+  const supportsInteractiveInput = runtimeBackendKind === 'persistent-pty' && (capabilities?.interactiveInput ?? true)
+  const supportsSessionResize = runtimeBackendKind === 'persistent-pty' && (capabilities?.sessionResize ?? true)
+  const interactiveInputTerminator = osName.toLowerCase().includes('windows') ? '\r\n' : '\n'
+  const isCommandRunning = Boolean(running || pane.isRunning)
+  const isInteractiveInputMode = Boolean(isCommandRunning && supportsInteractiveInput)
+  const runtimeSessionDisplayId = useMemo(
+    () => (runtimeSession?.sessionId ?? runtimeSessionId).slice(0, 8),
+    [runtimeSession?.sessionId, runtimeSessionId],
+  )
+  const savedSnippetCommands = useMemo(() => new Set(commandSnippets.map((snippet) => snippet.command)), [commandSnippets])
+  const topRecommendedCommands = useMemo(() => insight?.recommendedCommands.slice(0, 4) ?? [], [insight])
+  const quickWorkflowSnippets = useMemo(() => commandSnippets.slice(0, 4), [commandSnippets])
+  const favoriteCommands = useMemo(() => starredCommands.slice(0, 4), [starredCommands])
+  const paneShellName = useMemo(
+    () => runtimeSession?.shell
+      ? getFriendlyShellName(runtimeSession.shell)
+      : getShellKindLabel(pane.shellKind) ?? shellName,
+    [runtimeSession?.shell, pane.shellKind, shellName],
+  )
 
   useEffect(() => {
     requestAnimationFrame(() => {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     })
-  }, [pane.commands])
+  }, [liveCommandBlock?.output, pane.commands])
 
   useEffect(() => {
     if (isFocused && inputRef.current) {
       inputRef.current.focus()
     }
   }, [isFocused])
+
+  useEffect(() => {
+    commandCountRef.current = pane.commands.length
+  }, [pane.commands.length])
+
+  useEffect(() => {
+    runtimeLastCommandRef.current = runtimeSession?.lastCommand ?? null
+  }, [runtimeSession?.lastCommand])
+
+  useEffect(() => {
+    if (!isFocused || !pendingTerminalCommand || isCommandRunning) {
+      return
+    }
+
+    setInput(pendingTerminalCommand)
+    setShowSuggestions(false)
+    setHistoryIndex(-1)
+    requestAnimationFrame(() => inputRef.current?.focus())
+    consumePendingTerminalCommand()
+  }, [consumePendingTerminalCommand, isCommandRunning, isFocused, pendingTerminalCommand])
 
   const finishExecution = useCallback((token?: string | null) => {
     if (token && executionTokenRef.current && executionTokenRef.current !== token) {
@@ -625,9 +1329,24 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
   }, [pane.id, pane.commands.length])
 
   useEffect(() => {
+    if (!liveCommandBlock) {
+      return
+    }
+
+    if (pane.commands.length > liveCommandBlock.baselineCommandCount) {
+      liveStreamSequenceRef.current = 0
+      expectedLiveCommandIdRef.current = null
+      setLiveCommandBlock(null)
+    }
+  }, [liveCommandBlock, pane.commands.length])
+
+  useEffect(() => {
     return () => {
       if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current)
       finishExecution()
+      liveStreamSequenceRef.current = 0
+      expectedLiveCommandIdRef.current = null
+      setLiveCommandBlock(null)
     }
   }, [finishExecution])
 
@@ -636,6 +1355,224 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
     getGitBranch(pane.cwd).then((b) => { if (!cancelled) setGitBranch(b) })
     return () => { cancelled = true }
   }, [pane.cwd])
+
+  useEffect(() => {
+    let cancelled = false
+    inspectWorkingDirectory(pane.cwd).then((nextInsight) => {
+      if (!cancelled) {
+        setInsight(nextInsight)
+      }
+    })
+    return () => { cancelled = true }
+  }, [pane.cwd])
+
+  useEffect(() => {
+    if (ptyMode) return
+    let cancelled = false
+
+    ensureTerminalSession(runtimeSessionId, pane.cwd, runtimeSessionLabel, runtimeSessionKind).then((snapshot) => {
+      if (!cancelled) {
+        setPaneRuntimeSession(pane.id, snapshot)
+      }
+    }).catch(() => {})
+
+    return () => { cancelled = true }
+  }, [pane.cwd, pane.id, ptyMode, runtimeSessionId, runtimeSessionKind, runtimeSessionLabel, setPaneRuntimeSession])
+
+  useEffect(() => {
+    const bootstrapCommand = pane.shellBootstrapCommand?.trim()
+    const sessionCreatedAtMs = runtimeSession?.createdAtMs ?? null
+
+    if (!bootstrapCommand || !sessionCreatedAtMs) {
+      return
+    }
+
+    if (pane.bootstrappedShellSessionCreatedAtMs === sessionCreatedAtMs) {
+      return
+    }
+
+    const staggerDelay = 1000 + (paneIndex * 1500)
+    const timer = window.setTimeout(() => {
+      void writeTerminalSessionInput(runtimeSessionId, `${bootstrapCommand}${interactiveInputTerminator}`).then((sent) => {
+        if (sent) {
+          markPaneShellBootstrapped(pane.id, sessionCreatedAtMs)
+        }
+      }).catch(() => {})
+    }, staggerDelay)
+
+    return () => window.clearTimeout(timer)
+  }, [
+    interactiveInputTerminator,
+    markPaneShellBootstrapped,
+    pane.bootstrappedShellSessionCreatedAtMs,
+    pane.id,
+    pane.shellBootstrapCommand,
+    paneIndex,
+    runtimeSession?.createdAtMs,
+    runtimeSessionId,
+  ])
+
+  useEffect(() => {
+    let cancelled = false
+
+    getTerminalSessionEvents(runtimeSessionId, 6).then((events) => {
+      if (!cancelled) {
+        setSessionEvents(events)
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setSessionEvents([])
+      }
+    })
+
+    return () => { cancelled = true }
+  }, [runtimeSession?.updatedAtMs, runtimeSessionId])
+
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | null = null
+
+    void listenToTerminalSessionLiveEvents((payload) => {
+      if (payload.sessionSnapshot.sessionId !== runtimeSessionId) {
+        return
+      }
+
+      setPaneRuntimeSession(pane.id, payload.sessionSnapshot)
+      runtimeLastCommandRef.current = payload.sessionSnapshot.lastCommand ?? runtimeLastCommandRef.current
+
+      const liveEvent = payload.event
+      if (liveEvent) {
+        setSessionEvents((previous) => {
+          const nextEvents = [liveEvent, ...previous.filter((event) => event.id !== liveEvent.id)]
+          return nextEvents.slice(0, 6)
+        })
+
+        if (liveEvent.kind === 'command-started') {
+          const nextCommandId = liveEvent.commandId ?? null
+          const isSameCommand = expectedLiveCommandIdRef.current === nextCommandId
+
+          if (!isSameCommand) {
+            liveStreamSequenceRef.current = 0
+          }
+          expectedLiveCommandIdRef.current = nextCommandId
+
+          setLiveCommandBlock((previous) => ({
+            commandId: nextCommandId,
+            command: liveEvent.command ?? payload.sessionSnapshot.lastCommand ?? 'Running command',
+            output: isSameCommand ? previous?.output ?? '' : '',
+            startedAtMs: liveEvent.timestampMs,
+            baselineCommandCount: commandCountRef.current,
+          }))
+        }
+      }
+    }).then((dispose) => {
+      if (disposed) {
+        dispose()
+      } else {
+        unlisten = dispose
+      }
+    }).catch(() => {})
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [pane.id, runtimeSessionId, setPaneRuntimeSession])
+
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | null = null
+
+    void listenToTerminalSessionStreamEvents((payload) => {
+      if (payload.sessionId !== runtimeSessionId) {
+        return
+      }
+
+      if (payload.sequence <= liveStreamSequenceRef.current) {
+        return
+      }
+      liveStreamSequenceRef.current = payload.sequence
+      expectedLiveCommandIdRef.current = payload.commandId ?? expectedLiveCommandIdRef.current
+
+      setLiveCommandBlock((previous) => {
+        if (!previous) {
+          return {
+            commandId: payload.commandId,
+            command: runtimeLastCommandRef.current ?? 'Running command',
+            output: payload.chunk,
+            startedAtMs: Date.now(),
+            baselineCommandCount: commandCountRef.current,
+          }
+        }
+
+        if (previous.commandId && payload.commandId && previous.commandId !== payload.commandId) {
+          expectedLiveCommandIdRef.current = payload.commandId
+          return {
+            commandId: payload.commandId,
+            command: runtimeLastCommandRef.current ?? 'Running command',
+            output: payload.chunk,
+            startedAtMs: Date.now(),
+            baselineCommandCount: commandCountRef.current,
+          }
+        }
+
+        return {
+          ...previous,
+          commandId: previous.commandId ?? payload.commandId,
+          output: previous.output + payload.chunk,
+        }
+      })
+    }).then((dispose) => {
+      if (disposed) {
+        dispose()
+      } else {
+        unlisten = dispose
+      }
+    }).catch(() => {})
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [runtimeSessionId])
+
+  useEffect(() => {
+    if (!supportsSessionResize || typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    let frameId: number | null = null
+    const emitResize = () => {
+      const container = scrollRef.current
+      if (!container) {
+        return
+      }
+
+      const cols = Math.max(40, Math.floor(container.clientWidth / Math.max(fontSize * 0.62, 7)))
+      const rows = Math.max(12, Math.floor(container.clientHeight / Math.max(fontSize * 1.7, 16)))
+      void resizeTerminalSession(runtimeSessionId, cols, rows)
+    }
+
+    emitResize()
+
+    const observer = new ResizeObserver(() => {
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId)
+      }
+      frameId = requestAnimationFrame(emitResize)
+    })
+
+    if (scrollRef.current) {
+      observer.observe(scrollRef.current)
+    }
+
+    return () => {
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId)
+      }
+      observer.disconnect()
+    }
+  }, [fontSize, runtimeSessionId, supportsSessionResize])
 
   const updateSuggestions = useCallback((val: string) => {
     if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current)
@@ -665,13 +1602,38 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
     return cmd
   }, [commandAliases])
 
+  const primeCommand = useCallback((command: string) => {
+    if (runningRef.current) return
+    setInput(command)
+    setShowSuggestions(false)
+    setHistoryIndex(-1)
+    inputRef.current?.focus()
+  }, [])
+
+  const saveSnippet = useCallback((command: string) => {
+    if (!command.trim() || savedSnippetCommands.has(command)) {
+      return
+    }
+
+    addCommandSnippet({
+      id: generateId(),
+      name: buildSnippetName(command),
+      command,
+    })
+  }, [addCommandSnippet, savedSnippetCommands])
+
   const cancelCommand = useCallback(async () => {
-    if (activeCommandId.current) {
-      await cancelRunningCommand(activeCommandId.current)
+    const commandId = activeCommandId.current ?? runtimeSession?.activeCommandId
+    if (commandId) {
+      await cancelRunningCommand(commandId)
       activeCommandId.current = null
     }
+    const snapshot = await getTerminalSessionSnapshot(runtimeSessionId)
+    if (snapshot) {
+      setPaneRuntimeSession(pane.id, snapshot)
+    }
     finishExecution()
-  }, [finishExecution])
+  }, [finishExecution, pane.id, runtimeSession?.activeCommandId, runtimeSessionId, setPaneRuntimeSession])
 
   const executeCommand = async (command: string) => {
     if (!command || runningRef.current) return
@@ -690,6 +1652,20 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
     }
 
     const resolved = resolveAliases(command)
+
+    if (isInteractiveCommand(resolved) && supportsInteractiveInput) {
+      setInput('')
+      addToCommandHistory(pane.id, command)
+      setHistoryIndex(-1)
+      setPtyMode(true)
+      setTimeout(() => {
+        void writeTerminalSessionInput(
+          runtimeSessionId,
+          `${resolved}${interactiveInputTerminator}`,
+        )
+      }, 150)
+      return
+    }
     const cmdId = generateId()
     const executionToken = generateId()
     executionTokenRef.current = executionToken
@@ -702,27 +1678,42 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
     addToCommandHistory(pane.id, command)
     setHistoryIndex(-1)
 
-    const runInPane = async (targetPaneId: string, targetCwd: string) => {
+    const runInPane = async (targetPane: TerminalPane) => {
       try {
-        const pCmdId = targetPaneId === pane.id ? cmdId : generateId()
-        const result = await runTerminalCommand(resolved, targetCwd, pCmdId)
-        const suffix = result.timedOut ? ' [TIMED OUT]' : result.cancelled ? ' [CANCELLED]' : ''
+        const pCmdId = targetPane.id === pane.id ? cmdId : generateId()
+        const sessionResult = await runTerminalSessionCommand(
+          targetPane.runtimeSessionId ?? targetPane.id,
+          resolved,
+          targetPane.cwd,
+          targetPane.label?.trim() || getPaneLabel(targetPane),
+          getPaneSessionKind(targetPane),
+          pCmdId,
+        )
+        const result = sessionResult.result
+        const suffix = result.cancelled ? ' [CANCELLED]' : ''
         const outputText = formatCommandOutput(result.stdout, result.stderr) + suffix
         const lineCount = outputText.split('\n').length
-        addCommandBlock(targetPaneId, {
+        setPaneRuntimeSession(targetPane.id, sessionResult.sessionSnapshot)
+        addCommandBlock(targetPane.id, {
           id: generateId(),
-          command: command + (resolved !== command ? ` → ${resolved}` : '') + (targetPaneId !== pane.id ? ' [broadcast]' : ''),
+          command: command + (resolved !== command ? ` → ${resolved}` : '') + (targetPane.id !== pane.id ? ' [broadcast]' : ''),
           output: outputText,
           exitCode: result.exitCode,
           timestamp: new Date().toLocaleTimeString(),
           isCollapsed: lineCount > AUTO_COLLAPSE_THRESHOLD,
           duration: formatCommandDuration(result.durationMs),
         })
-        if (result.resolvedCwd && result.resolvedCwd !== targetCwd) {
-          setPaneWorkingDirectory(targetPaneId, result.resolvedCwd)
+        if (sessionResult.sessionSnapshot.cwd && sessionResult.sessionSnapshot.cwd !== targetPane.cwd) {
+          setPaneWorkingDirectory(targetPane.id, sessionResult.sessionSnapshot.cwd)
+        } else if (result.resolvedCwd && result.resolvedCwd !== targetPane.cwd) {
+          setPaneWorkingDirectory(targetPane.id, result.resolvedCwd)
         }
       } catch (error) {
-        addCommandBlock(targetPaneId, {
+        const snapshot = await getTerminalSessionSnapshot(targetPane.runtimeSessionId ?? targetPane.id)
+        if (snapshot) {
+          setPaneRuntimeSession(targetPane.id, snapshot)
+        }
+        addCommandBlock(targetPane.id, {
           id: generateId(),
           command,
           output: getErrorMessage(error),
@@ -734,19 +1725,20 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
       }
     }
 
+    const otherPanes = broadcastPanes?.filter((p) => p.id !== pane.id) ?? []
+
     try {
       if (broadcastPanes && broadcastPanes.length > 0) {
-        const otherPanes = broadcastPanes.filter((p) => p.id !== pane.id)
         otherPanes.forEach((p) => setPaneRunning(p.id, true))
         await Promise.all([
-          runInPane(pane.id, pane.cwd),
-          ...otherPanes.map((p) => runInPane(p.id, p.cwd)),
+          runInPane(pane),
+          ...otherPanes.map((targetPane) => runInPane(targetPane)),
         ])
-        otherPanes.forEach((p) => setPaneRunning(p.id, false))
       } else {
-        await runInPane(pane.id, pane.cwd)
+        await runInPane(pane)
       }
     } finally {
+      otherPanes.forEach((p) => setPaneRunning(p.id, false))
       activeCommandId.current = null
       setPaneRunning(pane.id, false)
       finishExecution(executionToken)
@@ -755,6 +1747,28 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (isInteractiveInputMode) {
+      const sent = await writeTerminalSessionInput(
+        runtimeSession?.sessionId ?? runtimeSessionId,
+        `${input}${interactiveInputTerminator}`,
+      )
+
+      if (sent) {
+        setInput('')
+        setHistoryIndex(-1)
+        setShowSuggestions(false)
+        requestAnimationFrame(() => inputRef.current?.focus())
+        return
+      }
+
+      const snapshot = await getTerminalSessionSnapshot(runtimeSession?.sessionId ?? runtimeSessionId)
+      if (snapshot) {
+        setPaneRuntimeSession(pane.id, snapshot)
+      }
+      return
+    }
+
     const command = input.trim()
     await executeCommand(command)
   }
@@ -785,10 +1799,47 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
     URL.revokeObjectURL(url)
   }, [pane])
 
-  const AUTO_COLLAPSE_THRESHOLD = 50
+  const AUTO_COLLAPSE_THRESHOLD = 200
 
   const successCount = pane.commands.filter((c) => c.exitCode === 0).length
   const errorCount = pane.commands.filter((c) => c.exitCode !== 0).length
+  const recommendedDockItems = useMemo(
+    () => topRecommendedCommands.map((item) => ({
+      id: item.id,
+      label: item.label,
+      command: item.command,
+      reason: item.reason,
+    })),
+    [topRecommendedCommands],
+  )
+  const workflowDockItems = useMemo(
+    () => quickWorkflowSnippets.map((snippet) => ({
+      id: snippet.id,
+      label: snippet.name,
+      command: snippet.command,
+      reason: 'Saved reusable workflow snippet.',
+    })),
+    [quickWorkflowSnippets],
+  )
+  const favoriteDockItems = useMemo(
+    () => favoriteCommands.map((command) => ({
+      id: `favorite-${command}`,
+      label: buildSnippetName(command),
+      command,
+      reason: 'Starred command from your operator toolkit.',
+    })),
+    [favoriteCommands],
+  )
+  const hasCommandDock = Boolean(
+    capabilities
+    || insight
+    || runtimeSession
+    || recommendedDockItems.length > 0
+    || workflowDockItems.length > 0
+    || favoriteDockItems.length > 0,
+  )
+  const shouldShowCommandDock = hasCommandDock && !isCommandRunning && !compactMode && pane.commands.length === 0
+  const shouldShowSessionTimeline = false
 
   const filteredCommands = useMemo(() => {
     let cmds = pane.commands
@@ -812,12 +1863,14 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
       }}
     >
       {/* ── Pane header - macOS style ── */}
-      <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ background: 'rgba(255,255,255,0.025)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <div className="flex items-center gap-1.5 mr-1">
-          <Circle size={7} fill="var(--error)" style={{ color: 'var(--error)', opacity: 0.8 }} />
-          <Circle size={7} fill="var(--warning)" style={{ color: 'var(--warning)', opacity: 0.8 }} />
-          <Circle size={7} fill="var(--success)" style={{ color: 'var(--success)', opacity: 0.8 }} />
-        </div>
+      <div className={`flex items-center gap-2 shrink-0 ${compactMode ? 'px-3 py-1.5' : 'px-4 py-2'}`} style={{ background: 'rgba(255,255,255,0.025)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        {!compactMode && (
+          <div className="flex items-center gap-1.5 mr-1">
+            <Circle size={7} fill="var(--error)" style={{ color: 'var(--error)', opacity: 0.8 }} />
+            <Circle size={7} fill="var(--warning)" style={{ color: 'var(--warning)', opacity: 0.8 }} />
+            <Circle size={7} fill="var(--success)" style={{ color: 'var(--success)', opacity: 0.8 }} />
+          </div>
+        )}
 
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <Terminal size={11} style={{ color: 'var(--text-muted)' }} />
@@ -830,17 +1883,38 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
               {pane.agentCli}
             </span>
           )}
-          {gitBranch && (
+          {!compactMode && <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-md tracking-wider"
+            style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' }}>
+            {runtimeSession?.sessionKind ?? runtimeSessionKind}
+          </span>}
+          {!compactMode && <span className="hidden lg:flex items-center gap-1 text-[8px] font-mono px-1.5 py-0.5 rounded-md"
+            style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' }}>
+            <ShieldCheck size={8} />
+            {runtimeBackendKind}
+          </span>}
+          {!compactMode && <span className="hidden lg:flex items-center gap-1 text-[8px] font-mono px-1.5 py-0.5 rounded-md"
+            style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)' }}>
+            <Hash size={8} />
+            {runtimeSessionDisplayId}
+          </span>}
+          {!compactMode && runtimeSession && (
+            <span className="hidden xl:flex items-center gap-1 text-[8px] font-mono px-1.5 py-0.5 rounded-md"
+              style={{ background: 'rgba(79,140,255,0.08)', color: 'var(--accent)' }}>
+              <Activity size={8} />
+              {runtimeSession.executionCount} runs
+            </span>
+          )}
+          {!compactMode && gitBranch && (
             <span className="flex items-center gap-1 text-[8px] font-mono px-1.5 py-0.5 rounded-md"
               style={{ background: 'rgba(166,227,161,0.08)', color: '#a6e3a1' }}>
               <GitBranch size={8} /> {gitBranch}
             </span>
           )}
-          <span className="hidden md:flex items-center gap-1 text-[8px] font-mono px-1.5 py-0.5 rounded-md"
+          {!compactMode && <span className="hidden md:flex items-center gap-1 text-[8px] font-mono px-1.5 py-0.5 rounded-md"
             style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' }}>
-            {shellName}
-          </span>
-          {running && (
+            {paneShellName}
+          </span>}
+          {isCommandRunning && (
             <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-md animate-pulse"
               style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
               RUNNING
@@ -852,7 +1926,7 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          {running && (
+          {isCommandRunning && (
             <button onClick={cancelCommand}
               className="flex items-center gap-1 text-[8px] font-bold uppercase px-2 py-1 rounded-md transition-all hover:bg-[rgba(255,71,87,0.2)]"
               style={{ color: 'var(--error)', background: 'rgba(255,71,87,0.1)', border: '1px solid rgba(255,71,87,0.2)' }}
@@ -860,8 +1934,8 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
               <StopCircle size={10} /> STOP
             </button>
           )}
-          {pane.commands.length > 0 && !running && (
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-md mr-1" style={{ color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)' }}>
+          {pane.commands.length > 0 && !isCommandRunning && (
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-md mr-1" style={{ color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', display: compactMode ? 'none' : 'inline-flex' }}>
               {successCount}✓{errorCount > 0 && <span style={{ color: 'var(--error)' }}> {errorCount}✗</span>}
             </span>
           )}
@@ -870,19 +1944,19 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
               {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
             </button>
           )}
-          <button onClick={() => setShowCdBar(!showCdBar)} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Navigate (cd)" style={{ color: showCdBar ? 'var(--accent)' : 'var(--text-muted)' }}>
+          {!compactMode && <button onClick={() => setShowCdBar(!showCdBar)} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Navigate (cd)" style={{ color: showCdBar ? 'var(--accent)' : 'var(--text-muted)' }}>
             <FolderOpen size={11} />
-          </button>
-          {fontSize !== 12 && (
+          </button>}
+          {!compactMode && fontSize !== 12 && (
             <span className="text-[7px] font-mono" style={{ color: 'var(--text-muted)' }}>{fontSize}px</span>
           )}
-          <button onClick={() => setFontSize((s) => Math.min(20, s + 1))} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Zoom in (Ctrl++)" style={{ color: 'var(--text-muted)' }}>
+          {!compactMode && <button onClick={() => setFontSize((s) => Math.min(20, s + 1))} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Zoom in (Ctrl++)" style={{ color: 'var(--text-muted)' }}>
             <ZoomIn size={11} />
-          </button>
-          <button onClick={() => setFontSize((s) => Math.max(8, s - 1))} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Zoom out (Ctrl+-)" style={{ color: 'var(--text-muted)' }}>
+          </button>}
+          {!compactMode && <button onClick={() => setFontSize((s) => Math.max(8, s - 1))} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Zoom out (Ctrl+-)" style={{ color: 'var(--text-muted)' }}>
             <ZoomOut size={11} />
-          </button>
-          {pane.commands.length > 0 && (
+          </button>}
+          {pane.commands.length > 0 && !compactMode && (
             <button onClick={exportAsMarkdown} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Export as Markdown" style={{ color: 'var(--text-muted)' }}>
               <FileDown size={11} />
             </button>
@@ -893,8 +1967,104 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
         </div>
       </div>
 
+      {ptyMode && (
+        <PtyTerminalEmulator
+          sessionId={runtimeSessionId}
+          cwd={pane.cwd}
+          paneIndex={paneIndex}
+          totalPanes={useStore.getState().getActiveTerminalPanes().length}
+          onExit={() => setPtyMode(false)}
+        />
+      )}
+
+      {!ptyMode && shouldShowCommandDock && (
+        <div className="shrink-0 px-4 py-3 space-y-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.015))' }}>
+          <div className="flex flex-wrap items-center gap-2">
+            {insight && (
+              <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: 'rgba(79,140,255,0.18)', background: 'rgba(79,140,255,0.08)', color: 'var(--accent)' }}>
+                <BookOpen size={9} />
+                {getProjectTypeLabel(insight.projectType)}
+              </span>
+            )}
+            {insight?.packageManager && (
+              <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' }}>
+                {insight.packageManager}
+              </span>
+            )}
+            {insight?.isGitRepo && (
+              <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: 'rgba(166,227,161,0.18)', background: 'rgba(166,227,161,0.08)', color: '#a6e3a1' }}>
+                <GitBranch size={9} />
+                Git
+              </span>
+            )}
+            {insight?.hasDocker && (
+              <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: 'rgba(255,191,98,0.18)', background: 'rgba(255,191,98,0.08)', color: 'var(--warning)' }}>
+                <Cpu size={9} />
+                Containers
+              </span>
+            )}
+            {capabilities && (
+              <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.03)', color: capabilities.persistentSessions ? 'var(--success)' : 'var(--warning)' }}>
+                <ShieldCheck size={9} />
+                {capabilities.executionMode}
+              </span>
+            )}
+            {runtimeSession && (
+              <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' }}>
+                <Terminal size={9} />
+                {runtimeBackendKind}
+              </span>
+            )}
+            {runtimeSession && (
+              <>
+                <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: 'rgba(79,140,255,0.18)', background: 'rgba(79,140,255,0.08)', color: 'var(--accent)' }}>
+                  <Activity size={9} />
+                  {runtimeSession.executionCount} executions
+                </span>
+                {runtimeSession.lastExitCode !== null && (
+                  <span className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ borderColor: runtimeSession.lastExitCode === 0 ? 'rgba(166,227,161,0.18)' : 'rgba(255,71,87,0.18)', background: runtimeSession.lastExitCode === 0 ? 'rgba(166,227,161,0.08)' : 'rgba(255,71,87,0.08)', color: runtimeSession.lastExitCode === 0 ? '#a6e3a1' : 'var(--error)' }}>
+                    {runtimeSession.lastExitCode === 0 ? <Check size={9} /> : <X size={9} />}
+                    exit {runtimeSession.lastExitCode}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <CommandDockGroup
+              title="Recommended"
+              icon={<Sparkles size={11} />}
+              items={recommendedDockItems}
+              accent="var(--accent)"
+              onSelect={primeCommand}
+            />
+            <CommandDockGroup
+              title="Favorites"
+              icon={<Star size={11} />}
+              items={favoriteDockItems}
+              accent="var(--warning)"
+              onSelect={primeCommand}
+            />
+            <CommandDockGroup
+              title="Workflows"
+              icon={<Workflow size={11} />}
+              items={workflowDockItems}
+              accent="var(--secondary)"
+              onSelect={primeCommand}
+            />
+          </div>
+        </div>
+      )}
+
+      {!ptyMode && shouldShowSessionTimeline && (
+        <div className="shrink-0 px-4 py-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.015)' }}>
+          <SessionTimelinePanel events={sessionEvents} onSelectCommand={primeCommand} />
+        </div>
+      )}
+
       {/* ── Filter & Search bar ── */}
-      {(showSearch || filter !== 'all') && (
+      {!ptyMode && (showSearch || filter !== 'all') && (
         <div className="shrink-0 flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.02)' }}>
           <div className="flex items-center gap-1">
             {(['all', 'success', 'errors'] as const).map((f) => (
@@ -924,25 +2094,51 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
       )}
 
       {/* ── Output area ── */}
-      <div
+      {!ptyMode && <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto min-h-0"
         style={{ background: 'var(--terminal-bg)', fontSize: `${fontSize}px` }}
         onClick={() => inputRef.current?.focus()}
         onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY }) }}
       >
-        {pane.commands.length === 0 && <WelcomeMessage cwd={pane.cwd} shellName={shellName} osName={osName} />}
+        {pane.commands.length === 0 && !liveCommandBlock && (
+          compactMode ? (
+            <div className="flex h-full min-h-[120px] items-center justify-center px-4 text-center">
+              <div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{getPaneLabel(pane)}</div>
+                <div className="mt-2 text-[10px] font-mono break-all" style={{ color: 'var(--text-muted)' }}>{pane.cwd}</div>
+              </div>
+            </div>
+          ) : <WelcomeMessage cwd={pane.cwd} shellName={paneShellName} osName={osName} />
+        )}
         {filteredCommands.map((block) => (
-          <CommandBlockUI key={block.id} block={block} onToggle={() => toggleCommandCollapse(pane.id, block.id)} onRerun={(cmd) => void executeCommand(cmd)} />
+          <CommandBlockUI
+            key={block.id}
+            block={block}
+            onToggle={() => toggleCommandCollapse(pane.id, block.id)}
+            onRerun={(cmd) => void executeCommand(cmd)}
+            onToggleStar={toggleStarCommand}
+            onSaveSnippet={saveSnippet}
+            isStarred={starredCommands.includes(block.command.split(' → ')[0].replace(' [broadcast]', ''))}
+            compactMode={compactMode}
+          />
         ))}
         {filter !== 'all' && filteredCommands.length === 0 && pane.commands.length > 0 && (
           <div className="text-center py-6 text-[11px]" style={{ color: 'var(--text-muted)' }}>No {filter === 'errors' ? 'errors' : 'successes'} found. <button onClick={() => setFilter('all')} className="underline" style={{ color: 'var(--accent)' }}>Show all</button></div>
         )}
-        {running && <RunningIndicator paneId={pane.id} />}
-      </div>
+        {liveCommandBlock && (
+          <LiveCommandBlockUI
+            command={liveCommandBlock.command}
+            output={liveCommandBlock.output}
+            startedAtMs={liveCommandBlock.startedAtMs}
+            compactMode={compactMode}
+          />
+        )}
+        {isCommandRunning && !liveCommandBlock && <RunningIndicator paneId={pane.id} />}
+      </div>}
 
       {/* ── Autocomplete suggestions ── */}
-      {showSuggestions && !running && (
+      {!ptyMode && showSuggestions && !isCommandRunning && !compactMode && (
         <div className="shrink-0 px-4 py-2 flex flex-wrap gap-1.5" style={{ background: 'rgba(255,255,255,0.02)', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
           <Search size={10} style={{ color: 'var(--text-muted)', marginTop: 4 }} />
           {suggestions.map((s) => (
@@ -959,7 +2155,7 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
       )}
 
       {/* ── cd navigation bar ── */}
-      {showCdBar && (
+      {!ptyMode && showCdBar && !compactMode && (
         <div className="shrink-0 flex items-center gap-2 px-4 py-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.025)' }}>
           <span className="font-mono text-[11px] font-bold shrink-0 flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
             <Terminal size={11} />
@@ -1022,7 +2218,7 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
           </button>
         </div>
       )}
-      {showCdBar && (
+      {!ptyMode && showCdBar && !compactMode && (
         <div className="shrink-0 px-4 py-1" style={{ background: 'rgba(255,255,255,0.015)' }}>
           <div className="text-[8px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
             Use the browser above or jump with terminal-style navigation commands.
@@ -1031,25 +2227,56 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
       )}
 
       {/* ── Input - Warp-style block input ── */}
-      <form onSubmit={handleSubmit} className="shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
-        <div className="flex items-center gap-2.5 px-4 py-3">
+      {!ptyMode && <form onSubmit={handleSubmit} className="shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+        <div className={`flex items-center gap-2.5 ${compactMode ? 'px-3 py-2' : 'px-4 py-3'}`}>
           <span className="font-mono text-[14px] font-bold shrink-0" style={{ color: focused ? 'var(--accent)' : 'var(--text-muted)' }}>
-            {running ? <Activity size={14} className="animate-spin" style={{ color: 'var(--accent)' }} /> : '❯'}
+            {isCommandRunning ? <Activity size={14} className="animate-spin" style={{ color: 'var(--accent)' }} /> : '❯'}
           </span>
           <input
             ref={inputRef}
             type="text"
             value={input}
-            onChange={(e) => { if (!running) { setInput(e.target.value); setHistoryIndex(-1); updateSuggestions(e.target.value) } }}
+            onChange={(e) => {
+              const nextValue = e.target.value
+              setInput(nextValue)
+              setHistoryIndex(-1)
+              if (isInteractiveInputMode || isCommandRunning) {
+                setShowSuggestions(false)
+                return
+              }
+              updateSuggestions(nextValue)
+            }}
             onFocus={() => setFocused(true)}
             onBlur={() => { setFocused(false); setTimeout(() => setShowSuggestions(false), 200) }}
             onKeyDown={(e) => {
-              if (e.key === 'c' && e.ctrlKey && running) {
+              if (e.key === 'c' && e.ctrlKey && isCommandRunning) {
                 e.preventDefault()
                 void cancelCommand()
                 return
               }
-              if (running) return
+              if (isInteractiveInputMode) {
+                if (e.key === 'Escape') {
+                  setShowSuggestions(false)
+                  setContextMenu(null)
+                } else if (e.key === 'l' && e.ctrlKey) {
+                  e.preventDefault()
+                  clearPaneCommands(pane.id)
+                } else if ((e.key === '=' || e.key === '+') && e.ctrlKey) {
+                  e.preventDefault()
+                  setFontSize((s) => Math.min(20, s + 1))
+                } else if (e.key === '-' && e.ctrlKey) {
+                  e.preventDefault()
+                  setFontSize((s) => Math.max(8, s - 1))
+                } else if (e.key === '0' && e.ctrlKey) {
+                  e.preventDefault()
+                  setFontSize(12)
+                } else if (e.key === 'f' && e.ctrlKey) {
+                  e.preventDefault()
+                  setShowSearch(true)
+                }
+                return
+              }
+              if (isCommandRunning) return
               if (e.key === 'ArrowUp' && persistedHistory.length > 0) {
                 e.preventDefault()
                 const next = Math.min(historyIndex + 1, persistedHistory.length - 1)
@@ -1084,36 +2311,45 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
                 setShowSearch(true)
               }
             }}
-            placeholder={running ? 'Press Ctrl+C to cancel...' : 'Type a command...'}
-            className="flex-1 bg-transparent font-mono text-[13px] outline-none placeholder:text-[var(--text-muted)] placeholder:opacity-50"
+            placeholder={isInteractiveInputMode ? 'Send input to running session...' : isCommandRunning ? 'Press Ctrl+C to cancel...' : 'Type a command...'}
+            className={`flex-1 bg-transparent font-mono outline-none placeholder:text-[var(--text-muted)] placeholder:opacity-50 ${compactMode ? 'text-[12px]' : 'text-[13px]'}`}
             style={{ color: 'var(--text-primary)' }}
             autoFocus={isFocused}
-            readOnly={running}
+            readOnly={isCommandRunning && !supportsInteractiveInput}
           />
           <div className="flex items-center gap-2 shrink-0">
-            {running && (
+            {isCommandRunning && (
               <button type="button" onClick={() => void cancelCommand()}
                 className="flex items-center gap-1 text-[9px] font-mono font-semibold px-2 py-1 rounded-md transition-all hover:bg-[rgba(255,71,87,0.15)]"
                 style={{ color: 'var(--error)', background: 'rgba(255,71,87,0.08)' }}>
                 <X size={9} /> Cancel
               </button>
             )}
-            {input && !running && (
+            {isInteractiveInputMode && (
+              <button
+                type="submit"
+                className="flex items-center gap-1 text-[9px] font-mono font-semibold px-2 py-1 rounded-md transition-all hover:opacity-90"
+                style={{ color: '#04111d', background: 'var(--accent)' }}
+              >
+                <CornerDownLeft size={9} /> Send
+              </button>
+            )}
+            {input && !isCommandRunning && !compactMode && (
               <span className="flex items-center gap-1 text-[9px] font-mono font-semibold px-2 py-1 rounded-md" style={{ color: 'var(--accent)', background: 'var(--accent-subtle)' }}>
                 <CornerDownLeft size={9} /> RUN
               </span>
             )}
-            {persistedHistory.length > 0 && !input && !running && (
+            {persistedHistory.length > 0 && !input && !isCommandRunning && !compactMode && (
               <span className="flex items-center gap-1 text-[9px] font-mono px-2 py-1 rounded-md" style={{ color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)' }}>
                 <ArrowUp size={9} /> {persistedHistory.length}
               </span>
             )}
           </div>
         </div>
-      </form>
+      </form>}
 
       {/* ── Pane status bar with breadcrumbs ── */}
-      <div className="shrink-0 flex items-center justify-between px-3 py-1" style={{ borderTop: '1px solid rgba(255,255,255,0.04)', background: 'rgba(0,0,0,0.12)' }}>
+      {!ptyMode && !compactMode && <div className="shrink-0 flex items-center justify-between px-3 py-1" style={{ borderTop: '1px solid rgba(255,255,255,0.04)', background: 'rgba(0,0,0,0.12)' }}>
         <div className="flex items-center gap-1 min-w-0 overflow-hidden">
           <FolderOpen size={9} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
           {pane.cwd.split(/[\\/]/).filter(Boolean).map((segment, i, arr) => (
@@ -1153,7 +2389,7 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, isOnly, onMaxi
           </span>
           {fontSize !== 12 && <span className="text-[7px] font-mono" style={{ color: 'var(--text-muted)' }}>{fontSize}px</span>}
         </div>
-      </div>
+      </div>}
 
       {/* ── Context menu ── */}
       {contextMenu && (
@@ -1191,8 +2427,14 @@ const SidebarPaneTab = React.memo(function SidebarPaneTab({ pane, index, isActiv
 }) {
   const renamePane = useStore((s) => s.renamePane)
   const cmdCount = pane.commands.length
-  const hasErrors = pane.commands.some((c) => c.exitCode !== 0)
-  const isRunning = pane.isRunning ?? false
+  const runtimeSession = pane.runtimeSession
+  const runtimeSessionDisplayId = (runtimeSession?.sessionId ?? pane.runtimeSessionId ?? pane.id).slice(0, 6)
+  const sessionKind = runtimeSession?.sessionKind ?? getPaneSessionKind(pane)
+  const lastExitCode = runtimeSession?.lastExitCode ?? null
+  const hasErrors = lastExitCode !== null ? lastExitCode !== 0 : pane.commands.some((c) => c.exitCode !== 0)
+  const isRunning = pane.isRunning ?? runtimeSession?.isRunning ?? false
+  const executionCount = runtimeSession?.executionCount ?? 0
+  const lastCommandPreview = runtimeSession?.lastCommand ? buildSnippetName(runtimeSession.lastCommand) : null
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
 
@@ -1248,6 +2490,9 @@ const SidebarPaneTab = React.memo(function SidebarPaneTab({ pane, index, isActiv
           </div>
         )}
         <div className="flex items-center gap-1 mt-0.5">
+          <span className="text-[7px] font-bold uppercase tracking-wider" style={{ color: isActive ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+            {sessionKind}
+          </span>
           {pane.agentCli && (
             <span className="text-[7px] font-bold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>
               {pane.agentCli}
@@ -1261,11 +2506,29 @@ const SidebarPaneTab = React.memo(function SidebarPaneTab({ pane, index, isActiv
           {pane.isLocked && (
             <Lock size={7} style={{ color: 'var(--warning)' }} />
           )}
-          {cmdCount > 0 && !isRunning && (
+          {executionCount > 0 && !isRunning && (
+            <span className="text-[8px] font-mono" style={{ color: 'var(--text-muted)' }}>
+              {executionCount} run{executionCount !== 1 ? 's' : ''}
+            </span>
+          )}
+          {executionCount === 0 && cmdCount > 0 && !isRunning && (
             <span className="text-[8px] font-mono" style={{ color: hasErrors ? 'var(--error)' : 'var(--text-muted)' }}>
               {cmdCount} cmd{cmdCount !== 1 ? 's' : ''}
             </span>
           )}
+          {lastExitCode !== null && !isRunning && (
+            <span className="text-[7px] font-mono px-1 py-0.5 rounded" style={{ color: lastExitCode === 0 ? '#a6e3a1' : 'var(--error)', background: lastExitCode === 0 ? 'rgba(166,227,161,0.08)' : 'rgba(255,71,87,0.08)' }}>
+              exit {lastExitCode}
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+          <span className="text-[7px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>
+            #{runtimeSessionDisplayId}
+          </span>
+          <span className="text-[8px] font-mono truncate" style={{ color: hasErrors ? 'var(--error)' : 'var(--text-muted)' }}>
+            {lastCommandPreview || pane.cwd}
+          </span>
         </div>
       </div>
       <div
@@ -1313,6 +2576,7 @@ export function TerminalView() {
   const activeTabId = useStore((s) => s.activeTabId)
   const terminalSessions = useStore((s) => s.terminalSessions)
   const workspaceTabs = useStore((s) => s.workspaceTabs)
+  const setActivePane = useStore((s) => s.setActivePane)
 
   const terminalPanes = useMemo(
     () => (activeTabId ? (terminalSessions[activeTabId] ?? []) : []),
@@ -1334,12 +2598,36 @@ export function TerminalView() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [broadcastMode, setBroadcastMode] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [zenMode, setZenMode] = useState(false)
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
+  const [capabilities, setCapabilities] = useState<TerminalCapabilities | null>(null)
   const previousTabIdRef = useRef<string | null>(null)
+  const trackedRuntimeSessionIdsRef = useRef<string[]>([])
 
   const runningPanes = terminalPanes.filter((p) => p.isRunning).length
-  const shellName = systemInfo ? getFriendlyShellName(systemInfo.shell) : getClientShellFallback()
+  const defaultShellName = systemInfo ? getFriendlyShellName(systemInfo.shell) : getClientShellFallback()
   const osName = systemInfo ? getFriendlyOsName(systemInfo.os) : getClientOsFallback()
+  const allRuntimeSessionIds = useMemo(
+    () => Object.values(terminalSessions).flatMap((panes) => panes.map((pane) => pane.runtimeSessionId ?? pane.id)),
+    [terminalSessions],
+  )
+  const activePane = useMemo(
+    () => terminalPanes.find((pane) => pane.id === activePaneId)
+      ?? terminalPanes.find((pane) => pane.isActive)
+      ?? terminalPanes[0]
+      ?? null,
+    [activePaneId, terminalPanes],
+  )
+  const shellName = useMemo(
+    () => activePane?.runtimeSession?.shell
+      ? getFriendlyShellName(activePane.runtimeSession.shell)
+      : getShellKindLabel(activePane?.shellKind) ?? defaultShellName,
+    [activePane?.runtimeSession?.shell, activePane?.shellKind, defaultShellName],
+  )
+  const activatePane = useCallback((paneId: string) => {
+    setActivePaneId(paneId)
+    setActivePane(paneId)
+  }, [setActivePane])
 
   useEffect(() => {
     let cancelled = false
@@ -1350,6 +2638,12 @@ export function TerminalView() {
       }
     })
 
+    void getTerminalCapabilities().then((runtimeCapabilities) => {
+      if (!cancelled && runtimeCapabilities) {
+        setCapabilities(runtimeCapabilities)
+      }
+    })
+
     return () => {
       cancelled = true
     }
@@ -1357,8 +2651,10 @@ export function TerminalView() {
 
   // Sync active pane with available panes
   useEffect(() => {
-    if (terminalPanes.length > 0 && (!activePaneId || !terminalPanes.find((p) => p.id === activePaneId))) {
-      setActivePaneId(terminalPanes[0].id)
+    const storeActivePaneId = terminalPanes.find((pane) => pane.isActive)?.id ?? terminalPanes[0]?.id ?? null
+
+    if (storeActivePaneId && storeActivePaneId !== activePaneId) {
+      setActivePaneId(storeActivePaneId)
     }
   }, [terminalPanes, activePaneId])
 
@@ -1368,6 +2664,18 @@ export function TerminalView() {
       previousTabIdRef.current = activeTabId
     }
   }, [activeTabId, preferredViewMode])
+
+  useEffect(() => {
+    const currentIds = Array.from(new Set(allRuntimeSessionIds))
+    const currentIdSet = new Set(currentIds)
+    const removedIds = trackedRuntimeSessionIdsRef.current.filter((sessionId) => !currentIdSet.has(sessionId))
+
+    removedIds.forEach((sessionId) => {
+      void closeTerminalSession(sessionId)
+    })
+
+    trackedRuntimeSessionIdsRef.current = currentIds
+  }, [allRuntimeSessionIds])
 
   // Auto-select best view mode when pane count changes
   useEffect(() => {
@@ -1388,9 +2696,15 @@ export function TerminalView() {
         e.preventDefault()
         const idx = parseInt(e.key) - 1
         if (idx < terminalPanes.length) {
-          setActivePaneId(terminalPanes[idx].id)
+          activatePane(terminalPanes[idx].id)
           if (viewMode !== 'focus') setViewMode('focus')
         }
+      }
+      // F11 to toggle zen mode (fullscreen terminals only)
+      if (e.key === 'F11') {
+        e.preventDefault()
+        setZenMode((z) => !z)
+        return
       }
       // Alt+ArrowLeft/Right to navigate panes
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -1400,13 +2714,13 @@ export function TerminalView() {
           const nextIdx = e.key === 'ArrowRight'
             ? (currentIdx + 1) % terminalPanes.length
             : (currentIdx - 1 + terminalPanes.length) % terminalPanes.length
-          setActivePaneId(terminalPanes[nextIdx].id)
+          activatePane(terminalPanes[nextIdx].id)
         }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [terminalPanes, activePaneId, viewMode])
+  }, [terminalPanes, activePaneId, viewMode, activatePane])
 
   // Compute visible panes based on view mode
   const visiblePanes = useMemo(() => {
@@ -1436,10 +2750,38 @@ export function TerminalView() {
     return terminalPanes
   }, [viewMode, activePaneId, terminalPanes])
 
+  const workspaceActivityPanes = useMemo(
+    () => [...terminalPanes]
+      .filter((pane) => pane.runtimeSession)
+      .sort((left, right) => {
+        const leftRunning = left.runtimeSession?.isRunning || left.isRunning ? 1 : 0
+        const rightRunning = right.runtimeSession?.isRunning || right.isRunning ? 1 : 0
+
+        if (rightRunning !== leftRunning) {
+          return rightRunning - leftRunning
+        }
+
+        return (right.runtimeSession?.updatedAtMs ?? 0) - (left.runtimeSession?.updatedAtMs ?? 0)
+      })
+      .slice(0, 4),
+    [terminalPanes],
+  )
+  const workspaceBackendKind = useMemo(() => {
+    const paneBackendKind = terminalPanes.find((pane) => pane.runtimeSession?.backendKind)?.runtimeSession?.backendKind
+    return paneBackendKind || capabilities?.backendKind || 'persistent-pty'
+  }, [capabilities?.backendKind, terminalPanes])
+  const splitDirection = activeWorkspace?.splitDirection ?? 'vertical'
   const gridCols = viewMode === 'focus' ? 1
-    : viewMode === 'split' ? 2
+    : viewMode === 'split' ? (splitDirection === 'horizontal' ? 1 : 2)
     : viewMode === 'quad' ? 2
     : getGridColumnsForPaneCount(terminalPanes.length)
+  const gridRows = viewMode === 'split' && splitDirection === 'horizontal'
+    ? 2
+    : Math.ceil(visiblePanes.length / gridCols)
+  const compactPaneMode = viewMode === 'grid' || visiblePanes.length >= 4
+  const compactToolbar = viewMode === 'grid' || terminalPanes.length >= 4
+  const showWorkspaceActivity = workspaceActivityPanes.length > 0 && !compactToolbar
+  const showPaneSidebar = terminalPanes.length > 1 && !sidebarCollapsed && !compactToolbar
 
   if (terminalPanes.length === 0) {
     return (
@@ -1472,8 +2814,17 @@ export function TerminalView() {
 
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
+      {/* ── Zen mode overlay hint ── */}
+      {zenMode && (
+        <div className="fixed top-2 right-2 z-50 opacity-0 hover:opacity-100 transition-opacity duration-300">
+          <button onClick={() => setZenMode(false)} className="text-[9px] font-bold uppercase px-2 py-1 rounded-md backdrop-blur-sm" style={{ background: 'rgba(0,0,0,0.6)', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.1)' }}>
+            F11 Exit Zen
+          </button>
+        </div>
+      )}
+
       {/* ── Top toolbar ── */}
-      <div className="shrink-0 flex items-center justify-between gap-4 px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, rgba(7,12,20,0.84), rgba(4,8,14,0.72))' }}>
+      {!zenMode && <div className={`shrink-0 flex items-center justify-between gap-3 ${compactToolbar ? 'px-3 py-2' : 'px-4 py-3'}`} style={{ borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, rgba(7,12,20,0.84), rgba(4,8,14,0.72))' }}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex items-center gap-2">
             <Terminal size={15} style={{ color: 'var(--accent)' }} />
@@ -1481,11 +2832,11 @@ export function TerminalView() {
               {activeWorkspace?.name ?? 'Terminal'}
             </span>
           </div>
-          <div className="h-4 w-px" style={{ background: 'var(--border)' }} />
-          <span className="text-[10px] font-mono truncate max-w-[200px]" style={{ color: 'var(--text-muted)' }}>
+          {!compactToolbar && <div className="h-4 w-px" style={{ background: 'var(--border)' }} />}
+          {!compactToolbar && <span className="text-[10px] font-mono truncate max-w-[200px]" style={{ color: 'var(--text-muted)' }}>
             {activeWorkspace?.workingDirectory ?? terminalPanes[0]?.cwd}
-          </span>
-          <div className="hidden xl:flex items-center gap-2">
+          </span>}
+          {!compactToolbar && <div className="hidden xl:flex items-center gap-2">
             <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
               <Terminal size={9} />
               {shellName}
@@ -1494,15 +2845,37 @@ export function TerminalView() {
               {osName}
               {systemInfo?.arch ? ` · ${systemInfo.arch.toUpperCase()}` : ''}
             </span>
-          </div>
+            {capabilities && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: capabilities.persistentSessions ? 'var(--success)' : 'var(--warning)' }}>
+                <Cpu size={9} />
+                {capabilities.persistentSessions ? 'Persistent PTY' : 'Stateless Shell'}
+              </span>
+            )}
+            {capabilities?.safeCancellation && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--info)' }}>
+                <ShieldCheck size={9} />
+                Safe Cancel
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-secondary)' }}>
+              <Terminal size={9} />
+              {workspaceBackendKind}
+            </span>
+          </div>}
+          {compactToolbar && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: runningPanes > 0 ? 'var(--accent)' : 'var(--text-secondary)' }}>
+              <LayoutGrid size={9} />
+              {terminalPanes.length} panes
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
           {/* Stats */}
-          <div className="flex items-center gap-3 text-[9px] font-mono mr-2" style={{ color: 'var(--text-muted)' }}>
+          <div className={`items-center gap-3 text-[9px] font-mono mr-2 ${compactToolbar ? 'hidden md:flex' : 'flex'}`} style={{ color: 'var(--text-muted)' }}>
             <span className="flex items-center gap-1"><LayoutGrid size={9} /> {terminalPanes.length}</span>
-            <span className="flex items-center gap-1"><Terminal size={9} /> {totalCmds}</span>
-            {activeAgents > 0 && <span className="flex items-center gap-1" style={{ color: 'var(--accent)' }}><Bot size={9} /> {activeAgents}</span>}
+            {!compactToolbar && <span className="flex items-center gap-1"><Terminal size={9} /> {totalCmds}</span>}
+            {!compactToolbar && activeAgents > 0 && <span className="flex items-center gap-1" style={{ color: 'var(--accent)' }}><Bot size={9} /> {activeAgents}</span>}
             {runningPanes > 0 && (
               <span className="flex items-center gap-1 animate-pulse" style={{ color: 'var(--accent)' }}>
                 <Activity size={9} /> {runningPanes} running
@@ -1513,7 +2886,7 @@ export function TerminalView() {
           {terminalPanes.length > 1 && (
             <button
               onClick={() => setBroadcastMode(!broadcastMode)}
-              className="flex items-center gap-1 text-[8px] font-bold uppercase px-2 py-1 rounded-md transition-all"
+              className={`flex items-center gap-1 text-[8px] font-bold uppercase rounded-md transition-all ${compactToolbar ? 'px-1.5 py-1' : 'px-2 py-1'}`}
               style={{
                 background: broadcastMode ? 'rgba(255,71,87,0.12)' : 'rgba(255,255,255,0.03)',
                 color: broadcastMode ? 'var(--error)' : 'var(--text-muted)',
@@ -1521,7 +2894,7 @@ export function TerminalView() {
               }}
               title="Broadcast mode: run commands in all panes simultaneously"
             >
-              <Zap size={9} /> {broadcastMode ? 'BROADCAST ON' : 'Broadcast'}
+              <Zap size={9} /> {broadcastMode ? 'BROADCAST ON' : compactToolbar ? 'Broadcast' : 'Broadcast'}
             </button>
           )}
 
@@ -1540,7 +2913,7 @@ export function TerminalView() {
           </div>
 
           {/* Sidebar toggle */}
-          {terminalPanes.length > 1 && (
+          {terminalPanes.length > 1 && !compactToolbar && (
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
               className="p-1.5 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]"
@@ -1551,16 +2924,84 @@ export function TerminalView() {
             </button>
           )}
         </div>
-      </div>
+      </div>}
+
+      {!zenMode && showWorkspaceActivity && (
+        <div className="shrink-0 px-4 py-2.5 flex items-center gap-2 overflow-x-auto" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)' }}>
+          <div className="shrink-0 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
+            <Activity size={10} style={{ color: 'var(--accent)' }} />
+            Workspace Activity
+          </div>
+          {workspaceActivityPanes.map((pane) => {
+            const runtimeSession = pane.runtimeSession
+            const isRunning = pane.isRunning ?? runtimeSession?.isRunning ?? false
+            const lastExitCode = runtimeSession?.lastExitCode ?? null
+            const sessionKind = runtimeSession?.sessionKind ?? getPaneSessionKind(pane)
+            const updatedAtMs = runtimeSession?.updatedAtMs ?? 0
+            const preview = runtimeSession?.lastCommand ? buildSnippetName(runtimeSession.lastCommand) : pane.cwd
+
+            return (
+              <button
+                key={pane.id}
+                onClick={() => {
+                  activatePane(pane.id)
+                }}
+                className="shrink-0 min-w-[180px] rounded-xl px-3 py-2 text-left transition-all hover:-translate-y-[1px]"
+                style={{
+                  background: activePaneId === pane.id ? 'var(--accent-subtle)' : 'rgba(255,255,255,0.03)',
+                  border: activePaneId === pane.id ? '1px solid rgba(79,140,255,0.28)' : '1px solid rgba(255,255,255,0.06)',
+                }}
+                title={preview}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                    {getPaneLabel(pane)}
+                  </div>
+                  <span className="text-[7px] font-bold uppercase tracking-[0.16em]" style={{ color: isRunning ? 'var(--accent)' : 'var(--text-muted)' }}>
+                    {sessionKind}
+                  </span>
+                </div>
+                <div className="mt-1 text-[8px] font-mono truncate" style={{ color: lastExitCode !== null && lastExitCode !== 0 ? 'var(--error)' : 'var(--text-muted)' }}>
+                  {preview}
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-2">
+                  <span className="text-[7px] font-mono" style={{ color: 'var(--text-muted)' }}>
+                    #{(runtimeSession?.sessionId ?? pane.runtimeSessionId ?? pane.id).slice(0, 6)}
+                  </span>
+                  <div className="flex items-center gap-1.5 text-[7px] font-mono">
+                    {updatedAtMs > 0 && (
+                      <span className="flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>
+                        <Clock size={8} />
+                        {formatSessionEventTimestamp(updatedAtMs)}
+                      </span>
+                    )}
+                    {lastExitCode !== null && !isRunning && (
+                      <span style={{ color: lastExitCode === 0 ? '#a6e3a1' : 'var(--error)' }}>
+                        exit {lastExitCode}
+                      </span>
+                    )}
+                    {isRunning && (
+                      <span className="flex items-center gap-1 animate-pulse" style={{ color: 'var(--accent)' }}>
+                        <Activity size={8} />
+                        running
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── Main content area ── */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* ── Sidebar (pane list) ── */}
-        {terminalPanes.length > 1 && !sidebarCollapsed && (
+        {!zenMode && showPaneSidebar && (
           <div
             className="shrink-0 flex flex-col overflow-hidden transition-all duration-200"
             style={{
-              width: '180px',
+              width: '170px',
               borderRight: '1px solid var(--border)',
               background: 'rgba(0,0,0,0.12)',
             }}
@@ -1578,8 +3019,7 @@ export function TerminalView() {
                   index={i}
                   isActive={activePaneId === pane.id}
                   onClick={() => {
-                    setActivePaneId(pane.id)
-                    if (viewMode === 'grid') setViewMode('focus')
+                    activatePane(pane.id)
                   }}
                 />
               ))}
@@ -1617,32 +3057,39 @@ export function TerminalView() {
         )}
 
         {/* ── Terminal grid/focus area ── */}
-        <div className="flex-1 overflow-hidden p-1.5 min-w-0">
-          <div className="h-full grid gap-1.5" style={{
+        <div className={`flex-1 overflow-hidden min-w-0 ${compactPaneMode ? 'p-1' : 'p-1.5'}`}>
+          <div className={`h-full grid ${compactPaneMode ? 'gap-1' : 'gap-1.5'}`} style={{
             gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
-            gridTemplateRows: `repeat(${Math.ceil(visiblePanes.length / gridCols)}, minmax(0, 1fr))`,
+            gridTemplateRows: `repeat(${gridRows}, minmax(0, 1fr))`,
           }}>
-            {visiblePanes.map((pane) => (
-              <TerminalPaneUI
-                key={pane.id}
-                pane={pane}
-                isOnly={terminalPanes.length === 1}
-                onActivate={() => setActivePaneId(pane.id)}
-                onMaximize={() => {
-                  if (viewMode === 'focus' && activePaneId === pane.id) {
-                    setViewMode(terminalPanes.length <= 2 ? 'split' : 'quad')
-                  } else {
-                    setActivePaneId(pane.id)
-                    setViewMode('focus')
-                  }
-                }}
-                isMaximized={viewMode === 'focus' && activePaneId === pane.id && terminalPanes.length > 1}
-                isFocused={activePaneId === pane.id}
-                broadcastPanes={broadcastMode ? terminalPanes : undefined}
-                shellName={shellName}
-                osName={osName}
-              />
-            ))}
+            {terminalPanes.map((pane, idx) => {
+              const isVisible = visiblePanes.includes(pane)
+              return (
+                <div key={pane.id} style={{ display: isVisible ? 'flex' : 'none', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
+                  <TerminalPaneUI
+                    pane={pane}
+                    paneIndex={idx}
+                    isOnly={terminalPanes.length === 1}
+                    onActivate={() => activatePane(pane.id)}
+                    onMaximize={() => {
+                      if (viewMode === 'focus' && activePaneId === pane.id) {
+                        setViewMode(terminalPanes.length <= 2 ? 'split' : 'quad')
+                      } else {
+                        activatePane(pane.id)
+                        setViewMode('focus')
+                      }
+                    }}
+                    isMaximized={viewMode === 'focus' && activePaneId === pane.id && terminalPanes.length > 1}
+                    isFocused={activePaneId === pane.id}
+                    broadcastPanes={broadcastMode ? terminalPanes : undefined}
+                    shellName={shellName}
+                    osName={osName}
+                    capabilities={capabilities}
+                    compactMode={compactPaneMode}
+                  />
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>

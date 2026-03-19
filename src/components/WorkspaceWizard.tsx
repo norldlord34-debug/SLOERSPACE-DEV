@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { getDefaultWorkingDirectory, openFolderDialog } from '@/lib/desktop'
+import { getDefaultWorkingDirectory, getAgentCliResolutions, isTauriApp, openFolderDialog } from '@/lib/desktop'
 import { useStore, AgentCli } from '@/store/useStore'
 import { useEffect, useState } from 'react'
 import { Zap, FolderOpen, Minus, Plus, Terminal, ArrowRight, Rocket, Bot, Check, Sparkles, Command, Layers3, Cpu } from 'lucide-react'
@@ -253,24 +253,30 @@ export function WorkspaceWizard() {
 
   if (wizardStep === 1) {
     return (
-      <div className="h-full overflow-y-auto px-5 py-6 lg:px-7 lg:py-7">
-        <div className="mx-auto max-w-[1100px] premium-panel-elevated premium-card-shell p-6 md:p-8 xl:p-10 animate-fade-in-up opacity-0" style={{ animationFillMode: 'forwards' }}>
-          <div className="flex flex-col items-center text-center">
-            <StepBar step={1} />
-            <div className="mt-6 h-[3px] w-16 rounded-full gradient-accent" />
-            <h1 className="mt-5 text-3xl md:text-4xl text-hero" style={{ color: 'var(--text-primary)' }}>
-              Configure Layout
-            </h1>
-            <p className="mt-3 max-w-xl text-[14px] leading-7" style={{ color: 'var(--text-secondary)' }}>
-              Select a template and working directory.
-            </p>
+      <div className="h-full overflow-hidden px-4 py-4 lg:px-6 lg:py-5">
+        <div className="mx-auto flex h-full max-w-[1240px] flex-col premium-panel-elevated premium-card-shell p-5 md:p-6 xl:p-7 animate-fade-in-up opacity-0" style={{ animationFillMode: 'forwards' }}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <StepBar step={1} />
+              <h1 className="mt-4 text-3xl md:text-4xl text-hero" style={{ color: 'var(--text-primary)' }}>
+                Configure Layout
+              </h1>
+              <p className="mt-2 text-[13px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+                Select a density and working directory before the agent step.
+              </p>
+            </div>
+
+            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(255,255,255,0.04)] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: 'var(--accent)' }}>
+              <Layers3 size={11} />
+              {wizardLayout} panes
+            </div>
           </div>
 
-          <div className="mt-10 grid gap-8 xl:grid-cols-[1.04fr_0.96fr]">
-            <div className="space-y-5">
-              <div>
+          <div className="mt-5 grid min-h-0 flex-1 gap-5 xl:grid-cols-[0.98fr_1.02fr]">
+            <div className="grid content-start gap-4">
+              <div className="premium-panel p-4">
                 <div className="label">Working Directory</div>
-                <div className="premium-panel flex items-center gap-3 px-4 py-3">
+                <div className="mt-3 flex items-center gap-3 rounded-[18px] border border-[var(--border)] bg-[rgba(9,15,24,0.72)] px-4 py-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[rgba(79,140,255,0.12)] text-[var(--accent)]">
                     <FolderOpen size={16} />
                   </div>
@@ -295,10 +301,8 @@ export function WorkspaceWizard() {
                     Browse
                   </button>
                 </div>
-              </div>
 
-              <div className="premium-panel overflow-hidden">
-                <div className="flex items-center gap-3 px-4 py-3">
+                <div className="mt-3 flex items-center gap-3 rounded-[18px] border border-[var(--border)] bg-[rgba(9,15,24,0.72)] px-4 py-3">
                   <span className="text-[11px] font-mono font-semibold" style={{ color: 'var(--accent)' }}>~ $</span>
                   <input
                     type="text"
@@ -328,25 +332,26 @@ export function WorkspaceWizard() {
                     Go
                   </button>
                 </div>
-                <div className="px-4 pb-4 text-[9px] font-bold uppercase tracking-[0.2em]" style={{ color: 'var(--text-muted)' }}>
-                  Use the browser above or jump with terminal-style navigation commands.
+
+                <div className="mt-2 text-[9px] font-bold uppercase tracking-[0.2em]" style={{ color: 'var(--text-muted)' }}>
+                  Use Browse or paste a terminal-style path jump.
                 </div>
               </div>
 
-              <div className="premium-panel p-5">
-                <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-                  <div className="rounded-[24px] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(6,10,18,0.96),rgba(4,8,14,0.98))] p-4 sm:min-w-[180px]">
+              <div className="premium-panel p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                  <div className="rounded-[22px] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(6,10,18,0.96),rgba(4,8,14,0.98))] p-4 sm:min-w-[180px]">
                     <div
                       className="grid gap-2"
                       style={{
                         gridTemplateColumns: `repeat(${previewColumns}, minmax(0, 1fr))`,
-                        gridTemplateRows: `repeat(${previewRows}, 38px)`,
+                        gridTemplateRows: `repeat(${previewRows}, 34px)`,
                       }}
                     >
                       {Array.from({ length: wizardLayout }).map((_, index) => (
                         <div
                           key={index}
-                          className="rounded-[14px] border border-[rgba(163,209,255,0.14)]"
+                          className="rounded-[12px] border border-[rgba(163,209,255,0.14)]"
                           style={{
                             background: `linear-gradient(180deg, rgba(79,140,255,${0.16 + (index * 0.015)}), rgba(40,231,197,0.06))`,
                             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
@@ -358,7 +363,7 @@ export function WorkspaceWizard() {
 
                   <div className="min-w-0">
                     <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Selected Template</div>
-                    <div className="mt-2 text-[22px] font-semibold tracking-[-0.04em]" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                    <div className="mt-2 text-[20px] font-semibold tracking-[-0.04em]" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
                       {selectedLayout.title}
                     </div>
                     <div className="mt-2 text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
@@ -371,64 +376,62 @@ export function WorkspaceWizard() {
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div className="space-y-5">
-              <div>
-                <div className="mb-4 flex items-center justify-between">
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Layout Templates</div>
-                    <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Select density</div>
-                  </div>
-                  <div className="premium-chip">
-                    <Layers3 size={12} style={{ color: 'var(--accent)' }} />
-                    Precision Grid
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                  {LAYOUTS.map((layout) => {
-                    const selected = wizardLayout === layout.count
-
-                    return (
-                      <button
-                        key={layout.count}
-                        onClick={() => setWizardLayout(layout.count)}
-                        className="rounded-[22px] p-4 text-center transition-all premium-interactive"
-                        style={{
-                          background: selected ? 'linear-gradient(180deg, rgba(79,140,255,0.16), rgba(40,231,197,0.08))' : 'rgba(9,15,24,0.72)',
-                          border: `1px solid ${selected ? 'rgba(79,140,255,0.36)' : 'var(--border)'}`,
-                          color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
-                          boxShadow: selected ? '0 18px 46px rgba(79,140,255,0.16)' : 'none',
-                        }}
-                      >
-                        <div className="mb-4 flex h-14 items-center justify-center rounded-[18px]" style={{ background: selected ? 'rgba(8,16,28,0.78)' : 'rgba(255,255,255,0.03)' }}>
-                          <LayoutGlyph layout={layout} active={selected} />
-                        </div>
-                        <div className="text-[10px] font-semibold">{layout.label}</div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="premium-panel p-5">
+              <div className="premium-panel p-4">
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Launch Summary</div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className="premium-stat px-4 py-4">
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="premium-stat px-4 py-3">
                     <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Pane Count</div>
                     <div className="mt-2 text-3xl font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>{wizardLayout}</div>
                   </div>
-                  <div className="premium-stat px-4 py-4">
+                  <div className="premium-stat px-4 py-3">
                     <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Directory</div>
                     <div className="mt-2 break-all text-[11px] font-mono leading-6" style={{ color: 'var(--text-secondary)' }}>{workDir || 'Not set'}</div>
                   </div>
                 </div>
               </div>
             </div>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Layout Templates</div>
+                  <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Select density</div>
+                </div>
+                <div className="premium-chip">
+                  <Layers3 size={12} style={{ color: 'var(--accent)' }} />
+                  Precision Grid
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                {LAYOUTS.map((layout) => {
+                  const selected = wizardLayout === layout.count
+
+                  return (
+                    <button
+                      key={layout.count}
+                      onClick={() => setWizardLayout(layout.count)}
+                      className="rounded-[20px] p-3 text-center transition-all premium-interactive"
+                      style={{
+                        background: selected ? 'linear-gradient(180deg, rgba(79,140,255,0.16), rgba(40,231,197,0.08))' : 'rgba(9,15,24,0.72)',
+                        border: `1px solid ${selected ? 'rgba(79,140,255,0.36)' : 'var(--border)'}`,
+                        color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        boxShadow: selected ? '0 18px 46px rgba(79,140,255,0.16)' : 'none',
+                      }}
+                    >
+                      <div className="mb-3 flex h-12 items-center justify-center rounded-[16px]" style={{ background: selected ? 'rgba(8,16,28,0.78)' : 'rgba(255,255,255,0.03)' }}>
+                        <LayoutGlyph layout={layout} active={selected} />
+                      </div>
+                      <div className="text-[10px] font-semibold">{layout.label}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           </div>
 
-          <div className="mt-10 flex items-center justify-between border-t border-[var(--border)] pt-6">
+          <div className="mt-5 flex items-center justify-between border-t border-[var(--border)] pt-5">
             <button
               onClick={() => { setWizardStep(0); setView('home') }}
               className="btn-ghost text-[11px] uppercase tracking-[0.16em]"
@@ -445,21 +448,21 @@ export function WorkspaceWizard() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-6 lg:px-7 lg:py-7">
-      <div className="grid gap-5 xl:grid-cols-[1.12fr_0.88fr] animate-fade-in-up opacity-0" style={{ animationFillMode: 'forwards' }}>
-        <div className="premium-panel-elevated p-6 md:p-8 xl:p-9">
+    <div className="h-full overflow-hidden px-4 py-4 lg:px-6 lg:py-5">
+      <div className="mx-auto grid h-full max-w-[1260px] gap-4 xl:grid-cols-[1.02fr_0.98fr] animate-fade-in-up opacity-0" style={{ animationFillMode: 'forwards' }}>
+        <div className="premium-panel-elevated flex min-h-0 flex-col p-5 md:p-6 xl:p-7">
           <StepBar step={2} />
-          <div className="mt-6 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--text-muted)' }}>Step 03 · Agent Fleet</div>
-          <h1 className="mt-3 text-3xl md:text-4xl text-hero" style={{ color: 'var(--text-primary)' }}>
-            Assign elite agents
+          <div className="mt-4 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--text-muted)' }}>Step 03 · Agent Fleet</div>
+          <h1 className="mt-2 text-3xl md:text-4xl text-hero" style={{ color: 'var(--text-primary)' }}>
+            Assign agents
             <br />
             <span className="text-gradient">to every slot.</span>
           </h1>
-          <p className="mt-4 max-w-2xl text-[14px] leading-8" style={{ color: 'var(--text-secondary)' }}>
-            Provision agents for your {wizardLayout} terminal sessions.
+          <p className="mt-2 max-w-2xl text-[13px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+            Provision agents for your {wizardLayout} terminal sessions without leaving the launch screen.
           </p>
 
-          <div className="mt-6 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
             <button onClick={() => {
               const each = Math.floor(wizardLayout / AGENTS.length)
               const rem = wizardLayout % AGENTS.length
@@ -483,25 +486,25 @@ export function WorkspaceWizard() {
             )}
           </div>
 
-          <div className="mt-5 space-y-3">
+          <div className="mt-4 grid gap-2.5">
             {AGENTS.map((agent) => {
               const count = wizardAgentConfig[agent.id]
               const active = count > 0
 
               return (
-                <div key={agent.id} className="premium-panel flex items-center gap-3 p-4 transition-all"
+                <div key={agent.id} className="premium-panel flex items-center gap-3 p-3 transition-all"
                   style={{ borderColor: active ? 'rgba(163,209,255,0.22)' : 'var(--border)' }}>
-                  <div className="flex h-11 w-11 items-center justify-center rounded-[18px]"
+                  <div className="flex h-10 w-10 items-center justify-center rounded-[16px]"
                     style={{
                       background: active ? 'linear-gradient(135deg, rgba(79,140,255,0.92), rgba(40,231,197,0.82))' : 'rgba(15,24,37,0.82)',
                       color: active ? '#04111d' : 'var(--text-muted)',
                       boxShadow: active ? '0 16px 34px rgba(79,140,255,0.18)' : 'none',
                     }}>
-                    <Bot size={16} />
+                    <Bot size={15} />
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{agent.label}</div>
+                    <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{agent.label}</div>
                     <div className="mt-1 text-[10px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>{agent.desc}</div>
                   </div>
 
@@ -516,14 +519,14 @@ export function WorkspaceWizard() {
                     All {wizardLayout}
                   </button>
 
-                  <div className="flex items-center gap-1 rounded-[18px] border border-[var(--border)] bg-[rgba(9,15,24,0.72)] p-1">
+                  <div className="flex items-center gap-1 rounded-[16px] border border-[var(--border)] bg-[rgba(9,15,24,0.72)] p-1">
                     <button onClick={() => {
                       if (count > 0) {
                         const c = { ...wizardAgentConfig }
                         c[agent.id] = count - 1
                         setWizardAgentConfig(c)
                       }
-                    }} className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-3)]">
+                    }} className="flex h-7 w-7 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-3)]">
                       <Minus size={12} />
                     </button>
                     <span className="w-8 text-center font-mono text-[12px] font-bold" style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }}>{count}</span>
@@ -533,7 +536,7 @@ export function WorkspaceWizard() {
                         c[agent.id] = count + 1
                         setWizardAgentConfig(c)
                       }
-                    }} className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-3)]">
+                    }} className="flex h-7 w-7 items-center justify-center rounded-xl text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-3)]">
                       <Plus size={12} />
                     </button>
                   </div>
@@ -543,8 +546,8 @@ export function WorkspaceWizard() {
           </div>
         </div>
 
-        <div className="grid gap-5">
-          <div className="premium-panel p-6 md:p-7 xl:p-8">
+        <div className="grid content-start gap-4">
+          <div className="premium-panel p-5 md:p-6 xl:p-7">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Fleet Status</div>
@@ -555,7 +558,7 @@ export function WorkspaceWizard() {
               </div>
             </div>
 
-            <div className="premium-stat px-5 py-5">
+            <div className="premium-stat px-5 py-4">
               <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Assigned</div>
               <div className="mt-2 text-4xl font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
                 {totalAgents}
@@ -569,7 +572,7 @@ export function WorkspaceWizard() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div className="premium-stat px-4 py-4">
                 <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Layout</div>
                 <div className="mt-2 text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>{wizardLayout} panes</div>
@@ -592,7 +595,7 @@ export function WorkspaceWizard() {
             </div>
           </div>
 
-          <div className="premium-panel p-6 md:p-7 xl:p-8">
+          <div className="premium-panel p-5 md:p-6 xl:p-7">
             <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Launch Actions</div>
             <div className="space-y-3">
               <button onClick={() => {
@@ -602,7 +605,17 @@ export function WorkspaceWizard() {
               }} className="btn-secondary w-full text-[12px] flex items-center justify-center gap-2">
                 <Terminal size={14} /> Launch without agents
               </button>
-              <button onClick={() => launchWorkspace({ workingDirectory: workDir })} className="btn-primary w-full text-[12px] flex items-center justify-center gap-2" disabled={!workDir.trim()}>
+              <button onClick={async () => {
+                let bootstrapCommands: Partial<Record<string, string | null>> | undefined
+                if (isTauriApp() && totalAgents > 0) {
+                  try {
+                    const cliIds = Object.entries(wizardAgentConfig).filter(([, count]) => count > 0).map(([cli]) => cli)
+                    const resolutions = await getAgentCliResolutions(cliIds)
+                    bootstrapCommands = Object.fromEntries(resolutions.map((r) => [r.cli, r.bootstrapCommand]))
+                  } catch { /* proceed without bootstrap */ }
+                }
+                launchWorkspace({ workingDirectory: workDir, agentBootstrapCommands: bootstrapCommands })
+              }} className="btn-primary w-full text-[12px] flex items-center justify-center gap-2" disabled={!workDir.trim()}>
                 <Rocket size={14} /> Launch Workspace
               </button>
             </div>
