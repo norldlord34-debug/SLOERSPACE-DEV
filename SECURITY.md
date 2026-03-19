@@ -16,7 +16,7 @@ Instead, please send a detailed report to:
 
 - **Email**: security@sloerspace.dev
 
-Or use GitHub's [private vulnerability reporting](https://github.com/nordlar49-design/SLOERSPACE-DEV/security/advisories/new) feature.
+Or use GitHub's [private vulnerability reporting](https://github.com/norldlord34-debug/SLOERSPACE-DEV/security/advisories/new) feature.
 
 ### What to Include
 

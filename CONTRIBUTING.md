@@ -75,7 +75,7 @@ npm run tauri:dev
 
 ## Reporting Bugs
 
-Use the [Bug Report](https://github.com/nordlar49-design/SLOERSPACE-DEV/issues/new?template=bug_report.md) template. Include:
+Use the [Bug Report](https://github.com/norldlord34-debug/SLOERSPACE-DEV/issues/new?template=bug_report.md) template. Include:
 
 - Steps to reproduce
 - Expected vs actual behavior
@@ -86,7 +86,7 @@ Use the [Bug Report](https://github.com/nordlar49-design/SLOERSPACE-DEV/issues/n
 
 ## Requesting Features
 
-Use the [Feature Request](https://github.com/nordlar49-design/SLOERSPACE-DEV/issues/new?template=feature_request.md) template.
+Use the [Feature Request](https://github.com/norldlord34-debug/SLOERSPACE-DEV/issues/new?template=feature_request.md) template.
 
 ---
 

@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nordlar49-design/SLOERSPACE-DEV/actions"><img src="https://github.com/nordlar49-design/SLOERSPACE-DEV/actions/workflows/release.yml/badge.svg" alt="Build Status" /></a>
-  <a href="https://github.com/nordlar49-design/SLOERSPACE-DEV/releases"><img src="https://img.shields.io/github/v/release/nordlar49-design/SLOERSPACE-DEV?color=blue&label=Latest%20Release" alt="Latest Release" /></a>
+  <a href="https://github.com/norldlord34-debug/SLOERSPACE-DEV/actions"><img src="https://github.com/norldlord34-debug/SLOERSPACE-DEV/actions/workflows/release.yml/badge.svg" alt="Build Status" /></a>
+  <a href="https://github.com/norldlord34-debug/SLOERSPACE-DEV/releases"><img src="https://img.shields.io/github/v/release/norldlord34-debug/SLOERSPACE-DEV?color=blue&label=Latest%20Release" alt="Latest Release" /></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue" alt="Platforms" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
 </p>
@@ -42,7 +42,7 @@
 
 ## Download
 
-Pre-built binaries for all platforms are available on the [**Releases**](https://github.com/nordlar49-design/SLOERSPACE-DEV/releases) page.
+Pre-built binaries for all platforms are available on the [**Releases**](https://github.com/norldlord34-debug/SLOERSPACE-DEV/releases) page.
 
 | Platform | Artifact |
 |---|---|
@@ -111,7 +111,7 @@ sudo apt install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
 
 ```bash
 # Clone the repository
-git clone https://github.com/nordlar49-design/SLOERSPACE-DEV.git
+git clone https://github.com/norldlord34-debug/SLOERSPACE-DEV.git
 cd SLOERSPACE-DEV
 
 # Install frontend dependencies
