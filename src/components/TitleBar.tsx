@@ -103,7 +103,8 @@ const TAB_COLORS = [
   '#e8956a', '#06b6d4', '#84cc16', '#58a6ff', '#f472b6',
 ]
 
-const NUM_BARS = 12
+const NUM_BARS = 14
+const WAVE_SHAPE = [0.42, 0.48, 0.65, 0.68, 0.55, 0.83, 1.0, 0.72, 0.88, 0.82, 0.65, 0.60, 0.50, 0.45]
 
 const LANG_BCP47: Record<WhisperLanguage, string> = {
   en: 'en-US',
@@ -119,7 +120,7 @@ export function TitleBar({ onNavToggle, onCommandPalette, onAIChatToggle }: { on
     workspaceTabs, activeTabId, setActiveTab, removeWorkspaceTab, updateWorkspaceTab,
     setView, currentView, setWizardStep, launchQuickShellWorkspace,
     siulkVoice, setSiulkVoiceRecording, setSiulkVoiceProcessing,
-    setSiulkVoiceLastTranscript, primeTerminalCommand,
+    setSiulkVoiceLastTranscript, primeVoiceTranscript,
   } = useStore()
   const { addToast } = useToast()
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
@@ -254,11 +255,12 @@ export function TitleBar({ onNavToggle, onCommandPalette, onAIChatToggle }: { on
         analyserRef.current.getByteFrequencyData(data)
         const heights: number[] = []
         for (let i = 0; i < NUM_BARS; i++) {
-          const lo = 1 + Math.floor(i * 30 / NUM_BARS)
-          const hi = 1 + Math.floor((i + 1) * 30 / NUM_BARS)
+          const lo = 1 + Math.floor(i * 28 / NUM_BARS)
+          const hi = 2 + Math.floor((i + 1) * 28 / NUM_BARS)
           let sum = 0, count = 0
           for (let b = lo; b <= hi; b++) { sum += data[b]; count++ }
-          heights.push(count > 0 ? (sum / count) / 255 : 0)
+          const raw = count > 0 ? (sum / count) / 255 : 0
+          heights.push(WAVE_SHAPE[i] * 0.15 + raw * 0.85)
         }
         setBarHeights(heights)
         rafRef.current = requestAnimationFrame(tick)
@@ -310,9 +312,11 @@ export function TitleBar({ onNavToggle, onCommandPalette, onAIChatToggle }: { on
         }
       }
       if (final.trim()) {
-        setSiulkVoiceLastTranscript(final.trim())
-        primeTerminalCommand(final.trim())
-        addToast(`✦ ${final.trim()}`, 'success', 4000)
+        const t = final.trim()
+        setSiulkVoiceLastTranscript(t)
+        primeVoiceTranscript(t)
+        void navigator.clipboard.writeText(t).catch(() => null)
+        addToast(`🎙 ${t}`, 'success', 5000)
       }
     }
 
@@ -338,7 +342,7 @@ export function TitleBar({ onNavToggle, onCommandPalette, onAIChatToggle }: { on
     recognition.start()
     void startAudioAnalysis()
     addToast('🎙 SiulkVoice listening…', 'info', 1800)
-  }, [siulkVoice.enabled, siulkVoice.whisperLanguage, setSiulkVoiceRecording, setSiulkVoiceProcessing, setSiulkVoiceLastTranscript, primeTerminalCommand, addToast, startAudioAnalysis])
+  }, [siulkVoice.enabled, siulkVoice.whisperLanguage, setSiulkVoiceRecording, setSiulkVoiceProcessing, setSiulkVoiceLastTranscript, primeVoiceTranscript, addToast, startAudioAnalysis])
 
   const stopRecording = useCallback(() => {
     if (recognitionRef.current) {
@@ -652,20 +656,22 @@ export function TitleBar({ onNavToggle, onCommandPalette, onAIChatToggle }: { on
             title="SiulkVoice — Click to toggle recording"
           >
             {siulkVoice.isRecording ? (
-              <span className="flex items-end gap-[2px]" style={{ height: '18px', overflow: 'hidden', minWidth: '38px' }}>
+              <span className="flex items-center gap-[3.5px]" style={{ height: '26px', overflow: 'hidden' }}>
                 {barHeights.map((level, i) => {
-                  const minH = 2, maxH = 18
-                  const h = Math.round(minH + level * (maxH - minH))
+                  const maxH = 24
+                  const shape = WAVE_SHAPE[i] ?? 0.5
+                  const h = Math.max(3, Math.round(shape * maxH * Math.max(0.14, level * 2.2)))
                   return (
                     <span
                       key={i}
                       style={{
                         display: 'inline-block',
-                        width: '2px',
-                        height: `${Math.max(minH, h)}px`,
-                        borderRadius: '2px',
-                        background: 'rgba(239,68,68,0.88)',
-                        transition: 'height 0.06s ease',
+                        width: '3.5px',
+                        height: `${h}px`,
+                        borderRadius: '2.5px',
+                        background: 'rgba(255,255,255,0.92)',
+                        transition: 'height 0.07s ease-out',
+                        flexShrink: 0,
                       }}
                     />
                   )
@@ -674,8 +680,12 @@ export function TitleBar({ onNavToggle, onCommandPalette, onAIChatToggle }: { on
             ) : (
               <Mic size={12} />
             )}
-            <span className="tracking-wider uppercase" style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '9px', letterSpacing: '0.12em' }}>SiulkVoice</span>
-            <Sparkles size={10} style={{ color: siulkVoice.isRecording ? 'rgba(239,68,68,0.75)' : 'var(--accent)' }} />
+            {!siulkVoice.isRecording && (
+              <>
+                <span className="tracking-wider uppercase" style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '9px', letterSpacing: '0.12em' }}>SiulkVoice</span>
+                <Sparkles size={10} style={{ color: 'var(--accent)' }} />
+              </>
+            )}
           </button>
         )}
 

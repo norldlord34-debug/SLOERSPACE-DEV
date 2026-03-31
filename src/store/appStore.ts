@@ -342,6 +342,7 @@ export interface AppState {
   hasCompletedOnboarding: boolean
   recentProjects: string[]
   pendingTerminalCommand: string | null
+  pendingVoiceTranscript: string | null
   commandAliases: Record<string, string>
   starredCommands: string[]
   commandSnippets: Array<{ id: string; name: string; command: string }>
@@ -412,6 +413,8 @@ export interface AppState {
   addRecentProject: (path: string) => void
   primeTerminalCommand: (command: string | null) => void
   consumePendingTerminalCommand: () => string | null
+  primeVoiceTranscript: (text: string | null) => void
+  consumeVoiceTranscript: () => string | null
   isPro: () => boolean
   isTrialActive: () => boolean
   setSiulkVoiceEnabled: (enabled: boolean) => void
@@ -1541,6 +1544,7 @@ export const useStore = create<AppState>()(persist(
     hasCompletedOnboarding: false,
     recentProjects: [],
     pendingTerminalCommand: null,
+    pendingVoiceTranscript: null,
     commandAliases: {},
     starredCommands: [],
     commandSnippets: [],
@@ -2281,6 +2285,7 @@ export const useStore = create<AppState>()(persist(
         authToken: null,
         sessionDevice: null,
         pendingTerminalCommand: null,
+      pendingVoiceTranscript: null,
       })
       try {
         const raw = localStorage.getItem('sloerspace-dev-store')
@@ -2311,10 +2316,14 @@ export const useStore = create<AppState>()(persist(
     primeTerminalCommand: (command) => set({ pendingTerminalCommand: command?.trim() || null }),
     consumePendingTerminalCommand: () => {
       const command = get().pendingTerminalCommand
-      if (command) {
-        set({ pendingTerminalCommand: null })
-      }
+      if (command) set({ pendingTerminalCommand: null })
       return command
+    },
+    primeVoiceTranscript: (text) => set({ pendingVoiceTranscript: text?.trim() || null }),
+    consumeVoiceTranscript: () => {
+      const text = get().pendingVoiceTranscript
+      if (text) set({ pendingVoiceTranscript: null })
+      return text
     },
     isPro: () => {
       const { userProfile, trialStartedAt } = get()

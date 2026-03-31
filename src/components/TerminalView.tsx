@@ -1232,6 +1232,8 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, paneIndex = 0,
   const commandSnippets = useStore((s) => s.commandSnippets)
   const pendingTerminalCommand = useStore((s) => s.pendingTerminalCommand)
   const consumePendingTerminalCommand = useStore((s) => s.consumePendingTerminalCommand)
+  const pendingVoiceTranscript = useStore((s) => s.pendingVoiceTranscript)
+  const consumeVoiceTranscript = useStore((s) => s.consumeVoiceTranscript)
   const toggleStarCommand = useStore((s) => s.toggleStarCommand)
   const addCommandSnippet = useStore((s) => s.addCommandSnippet)
   const markPaneShellBootstrapped = useStore((s) => s.markPaneShellBootstrapped)
@@ -1322,6 +1324,15 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, paneIndex = 0,
     requestAnimationFrame(() => inputRef.current?.focus())
     consumePendingTerminalCommand()
   }, [consumePendingTerminalCommand, isCommandRunning, isFocused, pendingTerminalCommand])
+
+  useEffect(() => {
+    if (!isFocused || !pendingVoiceTranscript) return
+    setInput((prev) => prev + pendingVoiceTranscript)
+    setShowSuggestions(false)
+    setHistoryIndex(-1)
+    requestAnimationFrame(() => inputRef.current?.focus())
+    consumeVoiceTranscript()
+  }, [consumeVoiceTranscript, isFocused, pendingVoiceTranscript])
 
   const finishExecution = useCallback((token?: string | null) => {
     if (token && executionTokenRef.current && executionTokenRef.current !== token) {
