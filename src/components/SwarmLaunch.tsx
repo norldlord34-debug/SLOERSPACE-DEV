@@ -2,12 +2,13 @@
 
 import { getAgentCliResolutions, getDefaultWorkingDirectory, isTauriApp, openFolderDialog } from '@/lib/desktop'
 import { useToast } from '@/components/Toast'
+import { CliLogo } from '@/components/CliLogo'
 import { generateId, type AgentCli, type AgentRole, type LaunchSwarmAgent, useStore } from '@/store/useStore'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowLeft, ArrowRight, BookOpen, Bot, Check, Crown, FolderOpen, Hammer,
+  ArrowLeft, ArrowRight, BookOpen, Bot, Check, ChevronDown, Crown, FolderOpen, Hammer,
   MessageSquareText, Plus, Rocket, Search, Settings2, ShieldCheck, Sparkles,
-  Target, Upload, Workflow, X, ChevronDown, Cpu, Layers3, Terminal
+  Upload, Workflow, X
 } from 'lucide-react'
 
 const SWARM_STEPS = [
@@ -18,12 +19,14 @@ const SWARM_STEPS = [
   { id: 'name', label: 'Name', icon: Sparkles, title: 'Name your swarm', description: 'Give your mission a short identity you can find later in the workspace.' },
 ] as const
 
-const CLI_OPTIONS: Array<{ id: AgentCli; label: string; subtitle: string; short: string }> = [
-  { id: 'claude', label: 'Claude', subtitle: 'Anthropic', short: 'C' },
-  { id: 'codex', label: 'Codex', subtitle: 'OpenAI', short: 'C' },
-  { id: 'gemini', label: 'Gemini', subtitle: 'Google', short: 'G' },
-  { id: 'opencode', label: 'OpenCode', subtitle: 'TUI', short: 'O' },
-  { id: 'cursor', label: 'Cursor', subtitle: 'Agent', short: 'C' },
+const CLI_OPTIONS: Array<{ id: AgentCli; label: string; subtitle: string; short: string; color: string; icon: string }> = [
+  { id: 'claude', label: 'Claude', subtitle: 'Anthropic', short: 'C', color: '#e8956a', icon: '✦' },
+  { id: 'codex', label: 'Codex', subtitle: 'OpenAI', short: 'C', color: '#10a37f', icon: '◈' },
+  { id: 'gemini', label: 'Gemini', subtitle: 'Google', short: 'G', color: '#4285f4', icon: '✧' },
+  { id: 'opencode', label: 'OpenCode', subtitle: 'TUI', short: 'O', color: '#06b6d4', icon: '⟐' },
+  { id: 'cursor', label: 'Cursor', subtitle: 'Agent', short: 'C', color: '#a855f7', icon: '⊡' },
+  { id: 'droid', label: 'Droid', subtitle: 'Coding', short: 'D', color: '#84cc16', icon: '⬡' },
+  { id: 'copilot', label: 'Copilot', subtitle: 'GitHub', short: 'C', color: '#58a6ff', icon: '⊛' },
 ]
 
 const ROLE_OPTIONS: Array<{ id: AgentRole; label: string; description: string; color: string; icon: typeof Crown }> = [
@@ -64,87 +67,22 @@ const MISSION_TEMPLATES = [
 ] as const
 
 const SWARM_SKILLS = [
-  { id: 'incremental-commits', group: 'Workflow', title: 'Incremental commits', description: 'Ship small validated changes frequently.' },
-  { id: 'refactor-only', group: 'Workflow', title: 'Refactor only', description: 'Restructure safely without changing behavior.' },
-  { id: 'monorepo-aware', group: 'Workflow', title: 'Monorepo aware', description: 'Respect package boundaries and shared tooling.' },
-  { id: 'test-driven', group: 'Quality', title: 'Test-driven', description: 'Write tests, then implement and verify.' },
-  { id: 'code-review', group: 'Quality', title: 'Code review', description: 'Route all changes through a review lane.' },
-  { id: 'documentation', group: 'Quality', title: 'Documentation', description: 'Document public APIs and operator-visible changes.' },
-  { id: 'security-audit', group: 'Quality', title: 'Security audit', description: 'Check for vulnerabilities while building.' },
-  { id: 'keep-ci-green', group: 'Ops', title: 'Keep CI green', description: 'Protect validation and release posture.' },
-  { id: 'migration-safe', group: 'Ops', title: 'Migration safe', description: 'Keep data and rollout changes reversible.' },
-  { id: 'performance', group: 'Analysis', title: 'Performance', description: 'Optimize for speed and efficiency.' },
+  { id: 'incremental-commits', group: 'Workflow', title: 'Incremental Commits', description: 'Commit small, atomic changes frequently', directive: 'Make small, atomic git commits after each meaningful change. Each commit should be independently valid and have a clear, descriptive message. Never batch unrelated changes into a single commit.' },
+  { id: 'refactor-only', group: 'Workflow', title: 'Refactor Only', description: 'Restructure without changing behavior', directive: 'This is a refactoring task: restructure and improve code quality without changing external behavior. Ensure all existing tests still pass. Do not add new features or fix bugs unless directly related to the refactor.' },
+  { id: 'monorepo-aware', group: 'Workflow', title: 'Monorepo Aware', description: 'Respect package boundaries and shared types', directive: 'This is a monorepo. Respect package boundaries — shared types belong in shared packages, not duplicated across projects. Check for cross-package imports before making changes. Run affected tests across packages.' },
+  { id: 'test-driven', group: 'Quality', title: 'Test-Driven', description: 'Write tests first, then implement to pass them', directive: 'Follow test driven development: write failing tests first, then implement the minimum code to make them pass. Ensure all new code has corresponding test coverage.' },
+  { id: 'code-review', group: 'Quality', title: 'Code Review', description: 'Review all changes before committing', directive: 'Before finalizing any changes, perform a thorough self-review: check for bugs, security issues, edge cases, and adherence to project conventions. Leave inline comments explaining non-obvious decisions.' },
+  { id: 'documentation', group: 'Quality', title: 'Documentation', description: 'Document all public APIs and complex logic', directive: 'Document all public functions, interfaces, and complex logic. Add JSDoc/TSDoc comments for exported APIs. Update README or relevant docs when behavior changes.' },
+  { id: 'security-audit', group: 'Quality', title: 'Security Audit', description: 'Check for vulnerabilities as you build', directive: 'Continuously audit for security vulnerabilities: validate all inputs, prevent injection attacks (SQL, XSS, command), use parameterized queries, avoid exposing sensitive data in logs or responses, and follow OWASP top 10 guidelines.' },
+  { id: 'dry-principle', group: 'Quality', title: 'DRY Principle', description: 'Eliminate code duplication aggressively', directive: 'Aggressively eliminate code duplication. Extract shared logic into reusable utilities, hooks, or base classes. When you see similar patterns repeated, consolidate them into a single source of truth.' },
+  { id: 'accessibility', group: 'Quality', title: 'Accessibility', description: 'Ensure UI meets WCAG accessibility standards', directive: 'Ensure all UI changes meet WCAG 2.1 AA standards: use semantic HTML, add ARIA labels, ensure keyboard navigability, maintain sufficient color contrast, and test with screen reader compatibility in mind.' },
+  { id: 'keep-ci-green', group: 'Ops', title: 'Keep CI Green', description: 'Ensure all checks pass before moving on', directive: 'After every change, run the project linter, type checker, and test suite. Do not proceed to the next task until all CI checks pass. Fix any failures immediately.' },
+  { id: 'migration-safe', group: 'Ops', title: 'Migration Safe', description: 'Ensure DB changes are reversible and safe', directive: 'All database changes must be migration-safe: include both up and down migrations, never drop columns in production without a deprecation period, use additive-only schema changes when possible, and test rollbacks.' },
+  { id: 'performance', group: 'Analysis', title: 'Performance', description: 'Optimize for speed and efficiency', directive: 'Optimize for performance: minimize unnecessary re-renders, avoid N+1 queries, use appropriate data structures, lazy-load where possible, and profile before and after changes when feasible.' },
 ] as const
 
 const SWARM_SKILL_GROUPS = ['Workflow', 'Quality', 'Ops', 'Analysis'] as const
 
-const SWARM_HERO_SIGNALS: Array<{ label: string; value: string; detail: string; icon: typeof Sparkles }> = [
-  { label: 'Mission graph', value: 'Shared execution map', detail: 'One objective, one roster, one control surface.', icon: Layers3 },
-  { label: 'Real runtime', value: 'Terminal-backed lanes', detail: 'Agents launch into real CLI sessions, not mock cards.', icon: Terminal },
-  { label: 'Operator control', value: 'Brief, route, review', detail: 'The operator can steer, audit, and stop the mission at any time.', icon: Cpu },
-] as const
-
-const SWARM_WORKFLOW_COLUMNS: Array<{ label: string; title: string; body: string; icon: typeof Sparkles }> = [
-  { label: 'Brief', title: 'Write one mission, not five disconnected prompts.', body: 'The whole swarm inherits the same objective, directory, and linked knowledge before execution starts.', icon: MessageSquareText },
-  { label: 'Compose', title: 'Specialists are assigned by role instead of improvising.', body: 'Coordinators, builders, scouts, reviewers, and custom lanes each get explicit responsibilities.', icon: Bot },
-  { label: 'Execute', title: 'Work moves in parallel with visible routing and handoffs.', body: 'The dashboard keeps execution and coordination synchronized while preserving operator visibility.', icon: Workflow },
-  { label: 'Review', title: 'Results come back through a review-aware delivery loop.', body: 'Reviewer lanes, live activity, and operator messaging reduce silent drift and missed regressions.', icon: ShieldCheck },
-] as const
-
-const SWARM_ADVANTAGES: Array<{ title: string; body: string; icon: typeof Sparkles }> = [
-  { title: 'One shared directory', body: 'Every agent boots with the same project root so execution never drifts into disconnected contexts.', icon: FolderOpen },
-  { title: 'Linked knowledge files', body: 'Screenshots, specs, logs, and notes stay attached to the mission instead of living outside the workflow.', icon: BookOpen },
-  { title: 'Clear role lanes', body: 'Specialized lanes create predictable handoffs between planning, implementation, research, and review.', icon: Crown },
-  { title: 'Live operator review', body: 'The operator can send directives, focus a lane, or stop the whole mission without losing session state.', icon: Sparkles },
-  { title: 'Real terminal surfaces', body: 'Swarm execution is tied to actual terminal panes, which keeps the system grounded in real command runtime.', icon: Terminal },
-  { title: 'Enterprise posture', body: 'The flow is optimized for shipping work with clarity, auditability, and less coordination overhead.', icon: Target },
-] as const
-
-const SWARM_FAQ = [
-  {
-    id: 'when',
-    question: 'When should I use SloerSwarm instead of a single terminal workspace?',
-    answer: 'Use Swarm when the work benefits from explicit coordination: implementation plus review, research plus execution, or larger missions that need parallel lanes with operator oversight.',
-  },
-  {
-    id: 'roles',
-    question: 'Do roles actually change how the mission behaves?',
-    answer: 'Yes. Roles shape task defaults, lane grouping, dashboard visualization, and the operator’s mental model of who is responsible for what inside the mission.',
-  },
-  {
-    id: 'knowledge',
-    question: 'What counts as supporting knowledge?',
-    answer: 'Specs, screenshots, bug reports, logs, release notes, and any files that should travel with the mission so every agent shares the same context.',
-  },
-  {
-    id: 'control',
-    question: 'Can I still intervene once the swarm is active?',
-    answer: 'Yes. The dashboard keeps operator messaging, lane focus, live activity, and stop controls available throughout the session.',
-  },
-] as const
-
-const SWARM_PLAYBOOK_SECTIONS = [
-  {
-    title: 'The problem with solo agents',
-    body: 'Single-agent loops often blur planning, implementation, research, and review into one stream. That works for quick tasks, but larger missions usually need clearer ownership and better visibility.',
-  },
-  {
-    title: 'One shared mission, one directory',
-    body: 'SloerSwarm starts from a single objective and a single working directory so the whole team works from the same operational source of truth.',
-  },
-  {
-    title: 'Specialized roles, not generic agents',
-    body: 'Coordination, build work, research, review, and custom duties can be assigned deliberately. That creates cleaner handoffs and a more senior-team execution pattern.',
-  },
-  {
-    title: 'Context files are part of the operating model',
-    body: 'Knowledge is not an afterthought. Screenshots, specs, and notes become mission inputs so every lane can operate with the same context envelope.',
-  },
-  {
-    title: 'Operator stays in control',
-    body: 'The operator can launch, direct, filter, review, and halt the swarm without losing situational awareness. The goal is leverage, not blind delegation.',
-  },
-] as const
 
 type CliDetectionState = 'checking' | 'available' | 'missing' | 'unverified'
 
@@ -154,6 +92,8 @@ const INITIAL_CLI_DETECTION: Record<AgentCli, CliDetectionState> = {
   gemini: 'checking',
   opencode: 'checking',
   cursor: 'checking',
+  droid: 'checking',
+  copilot: 'checking',
 }
 
 const EMPTY_CLI_BOOTSTRAP: Record<AgentCli, string | null> = {
@@ -162,6 +102,8 @@ const EMPTY_CLI_BOOTSTRAP: Record<AgentCli, string | null> = {
   gemini: null,
   opencode: null,
   cursor: null,
+  droid: null,
+  copilot: null,
 }
 
 function getTaskTemplate(role: AgentRole, objective: string) {
@@ -256,11 +198,8 @@ export function SwarmLaunch() {
   const [agents, setAgents] = useState<LaunchSwarmAgent[]>(() => buildAgentsFromPreset({ coord: 1, builder: 2, scout: 1, reviewer: 1, custom: 0 }, 'claude', ''))
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [isBrowsingDirectory, setIsBrowsingDirectory] = useState(false)
-  const [expandedFaqId, setExpandedFaqId] = useState<string | null>(SWARM_FAQ[0]?.id ?? null)
+  const [expandedSkillId, setExpandedSkillId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const wizardRef = useRef<HTMLDivElement>(null)
-  const playbookRef = useRef<HTMLDivElement>(null)
-  const faqRef = useRef<HTMLDivElement>(null)
   const previousObjectiveRef = useRef('')
   const directorySuggestions = useMemo(
     () => Array.from(new Set([workDir, defaultDir, ...recentProjects].filter(Boolean))).slice(0, 6),
@@ -356,6 +295,8 @@ export function SwarmLaunch() {
         gemini: 'unverified',
         opencode: 'unverified',
         cursor: 'unverified',
+        droid: 'unverified',
+        copilot: 'unverified',
       })
       setCliBootstrapCommands(EMPTY_CLI_BOOTSTRAP)
       return
@@ -394,6 +335,8 @@ export function SwarmLaunch() {
         gemini: 'unverified',
         opencode: 'unverified',
         cursor: 'unverified',
+        droid: 'unverified',
+        copilot: 'unverified',
       })
       setCliBootstrapCommands(EMPTY_CLI_BOOTSTRAP)
     })
@@ -402,19 +345,6 @@ export function SwarmLaunch() {
       disposed = true
     }
   }, [])
-
-  const selectedAgent = useMemo(
-    () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
-    [agents, selectedAgentId],
-  )
-  const selectedRoleMeta = useMemo(
-    () => ROLE_OPTIONS.find((role) => role.id === selectedAgent?.role) ?? null,
-    [selectedAgent],
-  )
-  const selectedCliMeta = useMemo(
-    () => CLI_OPTIONS.find((option) => option.id === selectedAgent?.cli) ?? null,
-    [selectedAgent],
-  )
 
   const roleCounts = useMemo(
     () => ROLE_ORDER.reduce((acc, role) => ({ ...acc, [role]: agents.filter((agent) => agent.role === role).length }), {
@@ -456,25 +386,6 @@ export function SwarmLaunch() {
       .map((agent) => agent.cli)
       .filter((cli) => cliDetection[cli] === 'missing'),
   ))
-  const preferredAvailableCli = CLI_OPTIONS.find((option) => cliDetection[option.id] === 'available')?.id ?? null
-
-  const getCliDetectionMeta = (cli: AgentCli) => {
-    const state = cliDetection[cli]
-
-    if (state === 'available') {
-      return { label: 'Detected', color: 'var(--success)' }
-    }
-
-    if (state === 'missing') {
-      return { label: 'Not found', color: 'var(--error)' }
-    }
-
-    if (state === 'checking') {
-      return { label: 'Checking', color: 'var(--warning)' }
-    }
-
-    return { label: 'Unverified', color: 'var(--text-muted)' }
-  }
 
   const canContinue = [
     totalAgents > 0,
@@ -626,10 +537,6 @@ export function SwarmLaunch() {
     applyWorkDir(nextDir, { syncCommand: true, remember: true })
   }
 
-  const scrollToSection = (ref: React.RefObject<HTMLDivElement>) => {
-    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-
   const applyMissionTemplate = (template: (typeof MISSION_TEMPLATES)[number]) => {
     setObjective(template.prompt)
     setAgents((current) => current.map((agent) => ({
@@ -642,38 +549,20 @@ export function SwarmLaunch() {
     const StepIcon = currentStep.icon
 
     return (
-      <div className="w-full max-w-5xl mx-auto animate-fade-in-up opacity-0" style={{ animationFillMode: 'forwards' }}>
-        <div className="flex flex-col items-center text-center">
-          <div className="mb-4 flex flex-wrap items-center justify-center gap-2">
-            <div className="premium-chip" style={{ color: 'var(--accent)' }}>
-              <StepIcon size={12} />
-              Step {step + 1}
-            </div>
-            <div className="premium-chip">
-              <Workflow size={12} style={{ color: 'var(--text-secondary)' }} />
-              {progressPercent}% ready
+      <div className="w-full max-w-5xl mx-auto">
+        <div className="flex flex-col items-center text-center mb-8">
+          <div className="relative mb-6">
+            <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-2xl blur-xl opacity-40" />
+            <div className="relative h-16 w-16 rounded-2xl flex items-center justify-center border border-white/20" style={{ background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(12px)' }}>
+              <StepIcon size={24} className="text-white" />
             </div>
           </div>
-          <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-[20px] border animate-float"
-            style={{
-              borderColor: 'rgba(79,140,255,0.24)',
-              background: 'radial-gradient(circle at top, rgba(79,140,255,0.18), rgba(6,10,18,0.94))',
-              boxShadow: '0 18px 48px rgba(24,103,255,0.18)',
-            }}>
-            <StepIcon size={22} style={{ color: 'var(--accent)' }} />
-          </div>
-          <h1 className="text-3xl md:text-4xl font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+          <h1 className="text-3xl md:text-4xl font-bold text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
             {currentStep.title}
           </h1>
-          <p className="mt-3 max-w-2xl text-[13px] leading-7" style={{ color: 'var(--text-secondary)' }}>
+          <p className="mt-3 max-w-lg text-sm text-white/60">
             {currentStep.description}
           </p>
-          <div className="mt-5 h-[3px] w-full max-w-md overflow-hidden rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
-            <div
-              className="h-full rounded-full animate-gradient"
-              style={{ width: `${progressPercent}%`, background: 'linear-gradient(90deg, var(--accent), var(--secondary))' }}
-            />
-          </div>
         </div>
 
         {step === 4 && (
@@ -891,470 +780,315 @@ export function SwarmLaunch() {
                 <div className="text-[10px] font-mono">{objective.trim().length} chars</div>
               </div>
             </div>
+
+            {/* Swarm Skills */}
+            <div className="mt-8 max-w-4xl mx-auto">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="h-10 w-10 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(79,140,255,0.12)' }}>
+                  <Sparkles size={16} style={{ color: 'var(--accent)' }} />
+                </div>
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-wider text-white/40">Swarm Skills</div>
+                  <div className="text-sm text-white/60">{selectedDirectiveCount} skills enabled</div>
+                </div>
+              </div>
+
+              {SWARM_SKILL_GROUPS.map((group) => {
+                const groupColor = group === 'Workflow' ? '#2ed573' : group === 'Quality' ? '#a855f7' : group === 'Ops' ? '#ffbf62' : '#4f8cff'
+                const groupSkills = SWARM_SKILLS.filter((skill) => skill.group === group)
+
+                return (
+                  <div key={group} className="mb-6">
+                    <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: groupColor }}>{group}</div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {groupSkills.map((skill) => {
+                        const active = missionDirectives.includes(skill.id)
+                        const expanded = expandedSkillId === skill.id
+
+                        return (
+                          <div key={skill.id} className={`rounded-2xl border overflow-hidden transition-all duration-300 ${expanded ? 'sm:col-span-2' : ''}`}
+                            style={{
+                              borderColor: active ? 'rgba(79,140,255,0.3)' : 'rgba(255,255,255,0.08)',
+                              background: active ? 'rgba(79,140,255,0.08)' : 'rgba(255,255,255,0.03)',
+                            }}>
+                            <div className="flex items-center justify-between px-4 py-3 cursor-pointer"
+                              onClick={() => setExpandedSkillId(expanded ? null : skill.id)}>
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="h-8 w-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${groupColor}20` }}>
+                                  <Workflow size={14} style={{ color: groupColor }} />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-sm font-semibold text-white truncate">{skill.title}</div>
+                                  {!expanded && <div className="text-xs text-white/40 truncate">{skill.description}</div>}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 shrink-0">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); toggleMissionDirective(skill.id) }}
+                                  className="relative w-10 h-6 rounded-full transition-all duration-300"
+                                  style={{ background: active ? 'rgba(79,140,255,0.5)' : 'rgba(255,255,255,0.15)' }}
+                                >
+                                  <div className="absolute top-1 w-4 h-4 rounded-full bg-white transition-all duration-300"
+                                    style={{ left: active ? '22px' : '2px' }} />
+                                </button>
+                                <ChevronDown size={14} className="text-white/40 transition-transform duration-300" style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                              </div>
+                            </div>
+
+                            {expanded && (
+                              <div className="px-4 pb-4">
+                                <div className="text-sm text-white/60 mb-4">{skill.description}</div>
+                                <div className="rounded-xl p-4" style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <MessageSquareText size={12} className="text-white/40" />
+                                    <span className="text-xs font-bold uppercase tracking-wider text-white/40">Agent Directive</span>
+                                  </div>
+                                  <div className="text-xs leading-relaxed text-white/50 font-mono">{skill.directive}</div>
+                                </div>
+                                <div className="mt-3 flex items-center justify-between">
+                                  <span className="text-xs font-bold uppercase tracking-wider px-2 py-1 rounded" style={{ background: `${groupColor}20`, color: groupColor }}>{group}</span>
+                                  <button
+                                    onClick={() => toggleMissionDirective(skill.id)}
+                                    className="text-xs font-semibold transition-all hover:opacity-80"
+                                    style={{ color: active ? 'var(--error)' : 'var(--accent)' }}
+                                  >
+                                    {active ? 'Disable Skill' : 'Enable Skill'}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 
         {step === 3 && (
-          <div className="mt-10 grid gap-5 xl:grid-cols-[1.02fr_0.98fr]">
-            <div className="space-y-5">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="premium-stat px-4 py-4">
-                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Linked files</div>
-                  <div className="mt-2 text-[13px] font-semibold" style={{ color: knowledgeFiles.length > 0 ? 'var(--success)' : 'var(--text-primary)' }}>{knowledgeLabel}</div>
-                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Screenshots, logs, specs, notes</div>
-                </div>
-                <div className="premium-stat px-4 py-4">
-                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Directives</div>
-                  <div className="mt-2 text-[13px] font-semibold" style={{ color: selectedDirectiveCount > 0 ? 'var(--accent)' : 'var(--text-primary)' }}>{selectedDirectiveCount}</div>
-                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Mission guardrails enabled</div>
-                </div>
-                <div className="premium-stat px-4 py-4">
-                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator notes</div>
-                  <div className="mt-2 text-[13px] font-semibold" style={{ color: contextNotes.trim() ? 'var(--success)' : 'var(--text-primary)' }}>
-                    {contextNotes.trim() ? 'Attached' : 'Optional'}
-                  </div>
-                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{contextNotes.trim().length} chars</div>
-                </div>
-              </div>
+          <div className="max-w-3xl mx-auto space-y-5">
+            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => handleKnowledgeSelection(e.target.files)} />
 
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => handleKnowledgeSelection(e.target.files)}
-              />
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="swarm-panel-soft swarm-grid-backdrop swarm-hover-lift p-8 md:p-10 cursor-pointer"
-                style={{ borderStyle: 'dashed' }}
-              >
-                <div className="flex flex-col items-center text-center">
-                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full"
-                    style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
-                    <Upload size={18} />
-                  </div>
-                  <div className="text-[20px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                    Add context files
-                  </div>
-                  <div className="mt-2 max-w-lg text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
-                    Attach PDFs, logs, specs, screenshots, or notes to give the swarm a shared brain before launch.
-                  </div>
-                </div>
+            {/* File upload area */}
+            <div onClick={() => fileInputRef.current?.click()}
+              className="rounded-2xl border border-dashed py-10 cursor-pointer text-center transition-all duration-300 hover:border-white/20"
+              style={{ borderColor: 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.02)' }}>
+              <div className="mx-auto mb-3 h-10 w-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(79,140,255,0.12)' }}>
+                <Upload size={18} style={{ color: 'var(--accent)' }} />
               </div>
-
-              {knowledgeFiles.length > 0 && (
-                <div className="swarm-panel-soft p-5">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-4" style={{ color: 'var(--text-muted)' }}>
-                    Attached context
-                  </div>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {knowledgeFiles.map((file) => (
-                      <div key={file} className="flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all"
-                        style={{ borderColor: 'var(--border)', background: 'rgba(5,10,18,0.78)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)' }}>
-                        <BookOpen size={14} style={{ color: 'var(--accent)' }} />
-                        <div className="min-w-0 flex-1 text-[11px] font-mono truncate" style={{ color: 'var(--text-primary)' }}>{file}</div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setKnowledgeFiles((current) => current.filter((item) => item !== file))
-                          }}
-                          className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]"
-                          style={{ color: 'var(--text-muted)' }}
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <div className="text-sm font-semibold text-white">Add context files</div>
+              <div className="mt-1 text-xs text-white/40">Drag & drop or click to attach PDFs, logs, specs, or images.</div>
             </div>
 
-            <div className="space-y-5">
-              <div className="swarm-panel-soft p-5 md:p-6">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
-                      Mission directives
-                    </div>
-                    <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                      Operational guardrails
-                    </div>
+            {/* Attached files */}
+            {knowledgeFiles.length > 0 && (
+              <div className="space-y-2">
+                {knowledgeFiles.map((file) => (
+                  <div key={file} className="flex items-center gap-3 rounded-xl border px-4 py-2.5"
+                    style={{ borderColor: 'rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
+                    <BookOpen size={14} style={{ color: 'var(--accent)' }} />
+                    <span className="flex-1 text-xs font-mono truncate text-white/70">{file}</span>
+                    <button onClick={() => setKnowledgeFiles((c) => c.filter((f) => f !== file))}
+                      className="text-white/30 hover:text-white/60 transition-all"><X size={14} /></button>
                   </div>
-                  <div className="premium-chip" style={{ color: 'var(--accent)' }}>
-                    <Workflow size={12} />
-                    {selectedDirectiveCount} selected
-                  </div>
-                </div>
-
-                <div className="mt-5 space-y-4">
-                  {SWARM_SKILL_GROUPS.map((group) => (
-                    <div key={group}>
-                      <div className="text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>{group}</div>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                        {SWARM_SKILLS.filter((skill) => skill.group === group).map((skill) => {
-                          const active = missionDirectives.includes(skill.id)
-
-                          return (
-                            <button
-                              key={skill.id}
-                              onClick={() => toggleMissionDirective(skill.id)}
-                              className="rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
-                              style={{
-                                borderColor: active ? 'rgba(79,140,255,0.34)' : 'var(--border)',
-                                background: active ? 'rgba(79,140,255,0.1)' : 'rgba(4,9,18,0.56)',
-                                boxShadow: active ? '0 16px 42px rgba(79,140,255,0.12)' : 'none',
-                              }}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{skill.title}</span>
-                                {active && <Check size={12} style={{ color: 'var(--accent)' }} />}
-                              </div>
-                              <div className="mt-2 text-[10px] leading-5" style={{ color: 'var(--text-secondary)' }}>{skill.description}</div>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                ))}
               </div>
+            )}
 
-              <div className="swarm-panel-soft p-5 md:p-6">
-                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
-                  Operator notes
-                </div>
-                <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                  Context only the operator should frame explicitly
-                </div>
-                <textarea
-                  value={contextNotes}
-                  onChange={(e) => setContextNotes(e.target.value)}
-                  placeholder="Add release constraints, non-obvious caveats, priorities, or review expectations..."
-                  className="mt-4 w-full min-h-[160px] rounded-[22px] border bg-[rgba(3,8,16,0.92)] px-5 py-4 text-[12px] leading-7 outline-none resize-none transition-all"
-                  style={{ borderColor: 'rgba(79,140,255,0.18)', color: 'var(--text-primary)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)' }}
-                />
-                <div className="mt-3 rounded-2xl px-4 py-3 text-[10px] leading-6" style={{ background: 'rgba(79,140,255,0.08)', color: 'var(--text-secondary)' }}>
-                  Notes are attached to the launch envelope so the active swarm can preserve operator intent, even when the brief is short.
-                </div>
-              </div>
+            {/* Operator notes */}
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider text-white/40 mb-2">Operator Notes (optional)</div>
+              <textarea
+                value={contextNotes}
+                onChange={(e) => setContextNotes(e.target.value)}
+                placeholder="Add release constraints, priorities, or review expectations..."
+                className="w-full min-h-[100px] rounded-xl border px-4 py-3 text-xs leading-relaxed outline-none resize-none"
+                style={{ borderColor: 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)', color: 'var(--text-primary)' }}
+              />
             </div>
           </div>
         )}
 
         {step === 0 && (
-          <div className="mt-10 grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
-            <div className="swarm-panel-soft p-5 md:p-6">
-              <div className="mb-5 grid gap-3 md:grid-cols-3">
-                <div className="premium-stat px-4 py-4">
-                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Preset posture</div>
-                  <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{activePreset ? activePreset.label : 'Custom roster'}</div>
-                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{totalAgents} agents in formation</div>
-                </div>
-                <div className="premium-stat px-4 py-4">
-                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Coverage</div>
-                  <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{activeRoleCount} active roles</div>
-                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Balanced lanes reduce operator load</div>
-                </div>
-                <div className="premium-stat px-4 py-4">
-                  <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission sync</div>
-                  <div className="mt-2 text-[13px] font-semibold" style={{ color: cliAvailabilitySummary.missing > 0 ? 'var(--warning)' : cliAvailabilitySummary.available > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
-                    {cliAvailabilitySummary.available} detected
-                  </div>
-                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{cliAvailabilitySummary.missing} missing · {cliAvailabilitySummary.unverified} unverified</div>
-                </div>
-              </div>
-              {unavailableSelectedClis.length > 0 && (
-                <div className="mb-5 rounded-2xl border px-4 py-3" style={{ borderColor: 'rgba(255,191,98,0.22)', background: 'rgba(255,191,98,0.08)' }}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--warning)' }}>CLI readiness warning</div>
-                      <div className="mt-1 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>
-                        Selected roster includes unavailable CLIs: {unavailableSelectedClis.join(', ')}.
-                      </div>
-                    </div>
-                    {preferredAvailableCli && (
-                      <button
-                        onClick={() => handleGlobalCliChange(preferredAvailableCli)}
-                        className="btn-secondary text-[10px] px-4 py-2"
-                      >
-                        Use {preferredAvailableCli}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-              <div className="text-[9px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: 'var(--text-muted)' }}>
-                Quick presets
-              </div>
-              <div className="grid gap-2 sm:grid-cols-5">
+          <div className="max-w-3xl mx-auto space-y-6">
+            {/* Quick Presets */}
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider mb-3 text-white/40">Quick Presets</div>
+              <div className="grid grid-cols-5 gap-2">
                 {PRESET_OPTIONS.map((preset) => (
                   <button
                     key={preset.total}
                     onClick={() => applyPreset(preset.total)}
-                    className="rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
+                    className="rounded-2xl border py-4 text-center transition-all duration-300 hover:scale-[1.03]"
                     style={{
-                      borderColor: presetSize === preset.total ? 'rgba(79,140,255,0.4)' : 'var(--border)',
-                      background: presetSize === preset.total ? 'rgba(79,140,255,0.12)' : 'rgba(4,9,18,0.56)',
+                      borderColor: presetSize === preset.total ? 'rgba(79,140,255,0.4)' : 'rgba(255,255,255,0.1)',
+                      background: presetSize === preset.total ? 'rgba(79,140,255,0.12)' : 'rgba(255,255,255,0.03)',
                     }}
                   >
-                    <div className="text-[16px] font-bold" style={{ color: presetSize === preset.total ? 'var(--accent)' : 'var(--text-primary)' }}>{preset.total}</div>
-                    <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>{preset.label}</div>
+                    <div className="text-2xl font-bold" style={{ color: presetSize === preset.total ? '#4f8cff' : 'white' }}>{preset.total}</div>
+                    <div className="text-[9px] font-bold uppercase tracking-wider text-white/40 mt-1">{preset.label}</div>
                   </button>
                 ))}
               </div>
+              {activePreset && (
+                <div className="mt-2 text-center text-xs text-white/40 font-mono">
+                  {Object.entries(activePreset.composition).filter(([, count]) => count > 0).map(([role, count]) => `${count} ${role}${count !== 1 ? 's' : ''}`).join(' · ')}
+                </div>
+              )}
+            </div>
 
-              <div className="mt-5 text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
-                CLI agent for all
-              </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-5">
-                {CLI_OPTIONS.map((option) => (
-                  (() => {
-                    const detectionMeta = getCliDetectionMeta(option.id)
-
-                    return (
-                      <button
-                        key={option.id}
-                        onClick={() => handleGlobalCliChange(option.id)}
-                        className="rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
-                        style={{
-                          borderColor: globalCli === option.id ? 'rgba(79,140,255,0.38)' : detectionMeta.color === 'var(--error)' ? 'rgba(255,71,87,0.22)' : 'var(--border)',
-                          background: globalCli === option.id ? 'rgba(79,140,255,0.1)' : 'rgba(4,9,18,0.56)',
-                        }}
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="flex h-7 w-7 items-center justify-center rounded-xl"
-                            style={{ background: globalCli === option.id ? 'var(--accent)' : 'rgba(255,255,255,0.06)', color: globalCli === option.id ? '#04111d' : 'var(--text-secondary)' }}>
-                            <span className="text-[10px] font-bold">{option.short}</span>
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{option.label}</div>
-                            <div className="text-[9px] font-mono uppercase" style={{ color: 'var(--text-muted)' }}>{option.subtitle}</div>
-                          </div>
-                        </div>
-                        <div className="mt-3 flex items-center justify-between">
-                          <span className="text-[8px] font-bold uppercase tracking-[0.14em]" style={{ color: detectionMeta.color }}>
-                            {detectionMeta.label}
-                          </span>
-                          {globalCli === option.id && (
-                            <span className="text-[8px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--accent)' }}>
-                              active
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                    )
-                  })()
-                ))}
-              </div>
-
-              <div className="mt-5 flex flex-wrap gap-2">
-                {ROLE_OPTIONS.filter((role) => roleCounts[role.id] > 0).map((role) => (
-                  <span key={role.id} className="rounded-full px-3 py-1 text-[10px] font-semibold"
-                    style={{ background: `${role.color}22`, color: role.color }}>
-                    {roleCounts[role.id]} {role.label}{roleCounts[role.id] !== 1 ? 's' : ''}
-                  </span>
-                ))}
-                <span className="ml-auto text-[10px] font-mono self-center" style={{ color: 'var(--text-muted)' }}>{totalAgents} total</span>
-              </div>
-
-              <div className="mt-5 max-h-[360px] overflow-y-auto space-y-2 pr-1">
-                {agents.map((agent, index) => {
-                  const roleMeta = ROLE_OPTIONS.find((role) => role.id === agent.role) ?? ROLE_OPTIONS[0]
-                  const cliMeta = CLI_OPTIONS.find((cli) => cli.id === agent.cli) ?? CLI_OPTIONS[0]
-                  const detectionMeta = getCliDetectionMeta(agent.cli)
-
+            {/* CLI Agent for All */}
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider mb-3 text-white/40">CLI Agent for All</div>
+              <div className="flex flex-wrap gap-2">
+                {CLI_OPTIONS.map((option) => {
+                  const isActive = globalCli === option.id
                   return (
                     <button
-                      key={agent.id}
-                      onClick={() => setSelectedAgentId(agent.id)}
-                      className="w-full rounded-2xl border px-4 py-3 text-left transition-all swarm-hover-lift"
+                      key={option.id}
+                      onClick={() => handleGlobalCliChange(option.id)}
+                      className="inline-flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all duration-300 hover:scale-[1.03]"
                       style={{
-                        borderColor: selectedAgentId === agent.id ? 'rgba(79,140,255,0.34)' : 'var(--border)',
-                        background: selectedAgentId === agent.id ? 'rgba(79,140,255,0.1)' : 'rgba(5,10,18,0.72)',
-                        boxShadow: selectedAgentId === agent.id ? '0 18px 46px rgba(79,140,255,0.16)' : 'none',
+                        borderColor: isActive ? `${option.color}66` : 'rgba(255,255,255,0.1)',
+                        background: isActive ? `${option.color}18` : 'rgba(255,255,255,0.03)',
+                        color: isActive ? option.color : 'rgba(255,255,255,0.7)',
+                        boxShadow: isActive ? `0 4px 20px ${option.color}22` : 'none',
                       }}
                     >
-                      <div className="flex items-start gap-3">
-                        <div className="w-5 shrink-0 text-[10px] font-mono pt-0.5" style={{ color: 'var(--text-muted)' }}>{index + 1}</div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em]"
-                              style={{ background: `${roleMeta.color}22`, color: roleMeta.color }}>
-                              {roleMeta.label}
-                            </span>
-                            <span className="text-[10px] font-mono uppercase" style={{ color: 'var(--text-muted)' }}>{cliMeta.label}</span>
-                            <span className="rounded-full px-2 py-1 text-[8px] font-bold uppercase tracking-[0.14em]" style={{ background: 'rgba(255,255,255,0.04)', color: detectionMeta.color }}>
-                              {detectionMeta.label}
-                            </span>
-                            {agent.autoApprove && (
-                              <span className="rounded-full px-2.5 py-1 text-[9px] font-semibold" style={{ background: 'rgba(46,213,115,0.12)', color: 'var(--success)' }}>
-                                Auto
-                              </span>
-                            )}
-                          </div>
-                          <div className="mt-2 text-[11px] leading-5" style={{ color: 'var(--text-secondary)' }}>
-                            {agent.task}
-                          </div>
-                        </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleRemoveAgent(agent.id)
-                          }}
-                          className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]"
-                          style={{ color: 'var(--text-muted)' }}
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
+                      <span className="h-6 w-6 rounded-lg flex items-center justify-center"
+                        style={{ background: isActive ? `${option.color}30` : 'rgba(255,255,255,0.08)' }}>
+                        <CliLogo cli={option.id} size={16} />
+                      </span>
+                      {option.label}
                     </button>
                   )
                 })}
               </div>
-
-              <button
-                onClick={handleAddAgent}
-                className="mt-4 w-full rounded-2xl border border-dashed px-4 py-3 text-[11px] font-bold uppercase tracking-[0.16em] transition-all swarm-hover-lift"
-                style={{ borderColor: 'rgba(79,140,255,0.28)', color: 'var(--accent)' }}
-              >
-                <span className="inline-flex items-center gap-2"><Plus size={13} /> Add agent</span>
-              </button>
             </div>
 
-            <div className="swarm-panel-soft p-5 md:p-6">
-              {selectedAgent ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
-                        Agent configuration
-                      </div>
-                      <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                        Selected agent
-                      </div>
-                    </div>
-                    <div className="premium-chip" style={{ color: 'var(--accent)' }}>
-                      <Workflow size={12} />
-                      {selectedAgent.role}
-                    </div>
-                  </div>
+            {/* Role Summary Pills */}
+            <div className="flex flex-wrap items-center gap-2">
+              {ROLE_OPTIONS.filter((role) => roleCounts[role.id] > 0).map((role) => {
+                const RoleIcon = role.icon
+                return (
+                  <span key={role.id} className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold"
+                    style={{ background: `${role.color}20`, color: role.color }}>
+                    <RoleIcon size={12} />
+                    {roleCounts[role.id]} {role.label}{roleCounts[role.id] !== 1 ? 's' : ''}
+                  </span>
+                )
+              })}
+              <span className="ml-auto text-xs font-mono text-white/40">{totalAgents} total</span>
+            </div>
 
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <div className="premium-stat px-4 py-3">
-                      <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Role</div>
-                      <div className="mt-2 text-[12px] font-semibold" style={{ color: selectedRoleMeta?.color || 'var(--text-primary)' }}>
-                        {selectedRoleMeta?.label || selectedAgent.role}
-                      </div>
-                    </div>
-                    <div className="premium-stat px-4 py-3">
-                      <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>CLI</div>
-                      <div className="mt-2 text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-                        {selectedCliMeta?.label || selectedAgent.cli}
-                      </div>
-                      <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: getCliDetectionMeta(selectedAgent.cli).color }}>
-                        {getCliDetectionMeta(selectedAgent.cli).label}
-                      </div>
-                    </div>
-                  </div>
+            {/* Agent List */}
+            <div className="space-y-2">
+              {agents.map((agent, index) => {
+                const roleMeta = ROLE_OPTIONS.find((r) => r.id === agent.role) ?? ROLE_OPTIONS[0]
+                const RoleIcon = roleMeta.icon
+                const cliMeta = CLI_OPTIONS.find((c) => c.id === agent.cli) ?? CLI_OPTIONS[0]
+                const isOpen = selectedAgentId === agent.id
 
-                  <div className="mt-5">
-                    <div className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: 'var(--text-muted)' }}>
-                      CLI agent
+                return (
+                  <div key={agent.id} className="rounded-2xl border overflow-hidden transition-all duration-300"
+                    style={{
+                      borderColor: isOpen ? 'rgba(79,140,255,0.3)' : 'rgba(255,255,255,0.08)',
+                      background: isOpen ? 'rgba(79,140,255,0.06)' : 'rgba(255,255,255,0.03)',
+                    }}>
+                    {/* Agent header row */}
+                    <div className="flex items-center gap-3 px-4 py-3 cursor-pointer"
+                      onClick={() => setSelectedAgentId(isOpen ? null : agent.id)}>
+                      <span className="text-xs font-mono text-white/30 w-5 shrink-0">{index + 1}</span>
+                      <div className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${roleMeta.color}20` }}>
+                        <RoleIcon size={16} style={{ color: roleMeta.color }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-white uppercase">{roleMeta.label}</div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: cliMeta.color }}><CliLogo cli={agent.cli} size={14} /> {cliMeta.label}</span>
+                          {agent.autoApprove && (
+                            <span className="text-xs font-semibold" style={{ color: 'var(--warning)' }}>⚡ Auto</span>
+                          )}
+                        </div>
+                      </div>
+                      <button onClick={(e) => { e.stopPropagation(); handleRemoveAgent(agent.id) }}
+                        className="p-1.5 rounded-lg text-white/30 hover:text-white/60 hover:bg-white/5 transition-all">
+                        <X size={14} />
+                      </button>
+                      <ChevronDown size={16} className="text-white/30 transition-transform duration-300 shrink-0" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0)' }} />
                     </div>
-                    <div className="grid gap-2 grid-cols-2">
-                      {CLI_OPTIONS.map((option) => (
-                        <button
-                          key={option.id}
-                          onClick={() => updateAgent(selectedAgent.id, { cli: option.id })}
-                          className="rounded-2xl border px-3 py-3 text-left transition-all swarm-hover-lift"
-                          style={{
-                            borderColor: selectedAgent.cli === option.id ? 'rgba(79,140,255,0.38)' : 'var(--border)',
-                            background: selectedAgent.cli === option.id ? 'rgba(79,140,255,0.1)' : 'rgba(4,9,18,0.6)',
-                          }}
-                        >
-                          <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{option.label}</div>
-                          <div className="text-[9px] font-mono uppercase mt-1" style={{ color: 'var(--text-muted)' }}>{option.subtitle}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
 
-                  <div className="mt-5">
-                    <div className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: 'var(--text-muted)' }}>
-                      Role
-                    </div>
-                    <div className="grid gap-2 grid-cols-2">
-                      {ROLE_OPTIONS.map((role) => {
-                        const RoleIcon = role.icon
-                        return (
-                          <button
-                            key={role.id}
-                            onClick={() => updateAgent(selectedAgent.id, { role: role.id, task: resolveTaskForRole(selectedAgent, role.id) })}
-                            className="rounded-2xl border px-3 py-3 text-left transition-all swarm-hover-lift"
-                            style={{
-                              borderColor: selectedAgent.role === role.id ? `${role.color}66` : 'var(--border)',
-                              background: selectedAgent.role === role.id ? `${role.color}14` : 'rgba(4,9,18,0.6)',
-                            }}
-                          >
-                            <div className="flex items-center gap-2">
-                              <RoleIcon size={13} style={{ color: role.color }} />
-                              <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{role.label}</span>
-                            </div>
-                            <div className="mt-2 text-[10px] leading-5" style={{ color: 'var(--text-secondary)' }}>{role.description}</div>
+                    {/* Expanded config */}
+                    {isOpen && (
+                      <div className="px-4 pb-4 space-y-4">
+                        {/* Role selector */}
+                        <div>
+                          <div className="text-xs font-bold uppercase tracking-wider text-white/40 mb-2">Role</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {ROLE_OPTIONS.map((role) => {
+                              const RI = role.icon
+                              return (
+                                <button key={role.id}
+                                  onClick={() => updateAgent(agent.id, { role: role.id, task: resolveTaskForRole(agent, role.id) })}
+                                  className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-all"
+                                  style={{
+                                    borderColor: agent.role === role.id ? `${role.color}66` : 'rgba(255,255,255,0.08)',
+                                    background: agent.role === role.id ? `${role.color}18` : 'transparent',
+                                    color: agent.role === role.id ? role.color : 'rgba(255,255,255,0.6)',
+                                  }}>
+                                  <RI size={12} /> {role.label}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+
+                        {/* CLI selector */}
+                        <div>
+                          <div className="text-xs font-bold uppercase tracking-wider text-white/40 mb-2">CLI</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {CLI_OPTIONS.map((opt) => (
+                              <button key={opt.id}
+                                onClick={() => updateAgent(agent.id, { cli: opt.id })}
+                                className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-all"
+                                style={{
+                                  borderColor: agent.cli === opt.id ? `${opt.color}66` : 'rgba(255,255,255,0.08)',
+                                  background: agent.cli === opt.id ? `${opt.color}18` : 'transparent',
+                                  color: agent.cli === opt.id ? opt.color : 'rgba(255,255,255,0.6)',
+                                }}>
+                                <CliLogo cli={opt.id} size={14} /> {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Auto-approve toggle */}
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <button onClick={() => updateAgent(agent.id, { autoApprove: !agent.autoApprove })}
+                            className="relative w-12 h-7 rounded-full transition-all duration-300"
+                            style={{ background: agent.autoApprove ? 'rgba(46,213,115,0.5)' : 'rgba(255,255,255,0.15)' }}>
+                            <div className="absolute top-1 w-5 h-5 rounded-full bg-white transition-all duration-300"
+                              style={{ left: agent.autoApprove ? '26px' : '2px' }} />
                           </button>
-                        )
-                      })}
-                    </div>
+                          <div>
+                            <span className="text-xs font-semibold text-white">Auto-approve</span>
+                            <span className="block text-xs text-white/40">Skip permission prompts</span>
+                          </div>
+                        </label>
+                      </div>
+                    )}
                   </div>
+                )
+              })}
 
-                  <div className="mt-5">
-                    <div className="text-[9px] font-bold uppercase tracking-[0.18em] mb-2" style={{ color: 'var(--text-muted)' }}>
-                      Task
-                    </div>
-                    <textarea
-                      value={selectedAgent.task}
-                      onChange={(e) => updateAgent(selectedAgent.id, { task: e.target.value })}
-                      placeholder="Optional task or instructions for this agent..."
-                      className="w-full min-h-[120px] rounded-2xl border bg-[rgba(4,9,18,0.74)] px-4 py-3 text-[12px] leading-6 outline-none resize-none"
-                      style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}
-                    />
-                  </div>
-
-                  <label className="mt-5 flex items-center gap-3 rounded-2xl border px-4 py-3 cursor-pointer"
-                    style={{ borderColor: 'var(--border)', background: 'rgba(4,9,18,0.62)' }}>
-                    <span className="relative flex h-5 w-5 items-center justify-center rounded-md border"
-                      style={{
-                        borderColor: selectedAgent.autoApprove ? 'var(--success)' : 'var(--text-muted)',
-                        background: selectedAgent.autoApprove ? 'rgba(46,213,115,0.16)' : 'transparent',
-                      }}>
-                      {selectedAgent.autoApprove && <Check size={12} style={{ color: 'var(--success)' }} />}
-                    </span>
-                    <span>
-                      <span className="block text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Auto-approve</span>
-                      <span className="block text-[10px] font-mono mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        Skip permission prompts for this agent when supported.
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={selectedAgent.autoApprove}
-                      onChange={(e) => updateAgent(selectedAgent.id, { autoApprove: e.target.checked })}
-                      className="sr-only"
-                    />
-                  </label>
-                </>
-              ) : (
-                <div className="h-full flex items-center justify-center text-center px-6">
-                  <div>
-                    <div className="text-[18px] font-semibold" style={{ color: 'var(--text-primary)' }}>No agent selected</div>
-                    <div className="mt-2 text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
-                      Pick an agent from the roster to edit CLI, role, task, and permissions.
-                    </div>
-                  </div>
-                </div>
-              )}
+              <button onClick={handleAddAgent}
+                className="w-full rounded-2xl border border-dashed py-3 text-xs font-bold uppercase tracking-wider text-white/40 hover:text-white/60 hover:border-white/20 transition-all"
+                style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+                <span className="inline-flex items-center gap-2"><Plus size={14} /> Add Agent</span>
+              </button>
             </div>
           </div>
         )}
@@ -1363,396 +1097,126 @@ export function SwarmLaunch() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden swarm-shell">
-      <div className="flex-1 overflow-y-auto px-5 py-6 lg:px-7 lg:py-7 swarm-content">
-        <div className="max-w-6xl mx-auto">
-          {step === 0 && (
-            <>
-              <section className="mb-8 grid gap-5 xl:grid-cols-[1.02fr_0.98fr]">
-                <div className="premium-panel-elevated premium-card-shell p-6 md:p-8 xl:p-10">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="premium-chip" style={{ color: 'var(--accent)' }}>
-                      <Workflow size={12} />
-                      SloerSwarm Command Surface
-                    </div>
-                    <div className="premium-chip">
-                      <Sparkles size={12} style={{ color: 'var(--warning)' }} />
-                      Multi-agent engineering system
-                    </div>
-                  </div>
+    <div className="relative h-full flex flex-col overflow-hidden bg-black">
+      {/* 3D Background */}
+      <div className="absolute inset-0">
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-black to-slate-900" />
+        <div className="absolute top-10 left-10 w-80 h-80 bg-amber-500/8 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute bottom-10 right-10 w-80 h-80 bg-blue-500/8 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-purple-500/5 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }} />
+      </div>
 
-                  <h1 className="mt-6 text-[34px] font-bold leading-[1.02] md:text-[48px]" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '-0.05em' }}>
-                    Turn AI agents into
-                    <br />
-                    a senior engineering team.
-                  </h1>
-
-                  <p className="mt-4 max-w-2xl text-[14px] leading-8" style={{ color: 'var(--text-secondary)' }}>
-                    SloerSwarm gives you the launchpad, shared mission brief, specialist roster, and live command surface required to coordinate real delivery across parallel agent lanes.
-                  </p>
-
-                  <div className="mt-6 flex flex-wrap gap-3">
-                    <button
-                      onClick={() => scrollToSection(wizardRef)}
-                      className="btn-primary inline-flex items-center gap-2"
-                    >
-                      Configure Swarm <ArrowRight size={14} />
-                    </button>
-                    <button
-                      onClick={() => scrollToSection(playbookRef)}
-                      className="btn-secondary inline-flex items-center gap-2"
-                    >
-                      Read Playbook <BookOpen size={13} />
-                    </button>
-                    <button
-                      onClick={() => scrollToSection(faqRef)}
-                      className="btn-ghost inline-flex items-center gap-2 text-[11px]"
-                    >
-                      FAQ <ChevronDown size={12} />
-                    </button>
-                  </div>
-
-                  <div className="mt-8 grid gap-3 md:grid-cols-3">
-                    {SWARM_HERO_SIGNALS.map((signal) => {
-                      const SignalIcon = signal.icon
-
-                      return (
-                        <div key={signal.label} className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(4,9,18,0.56)' }}>
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
-                              <SignalIcon size={14} />
-                            </div>
-                            <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>{signal.label}</div>
-                          </div>
-                          <div className="mt-4 text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>{signal.value}</div>
-                          <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{signal.detail}</div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-
-                <div className="swarm-panel-soft p-5 md:p-6 xl:p-7">
-                  <div className="rounded-[28px] border p-5" style={{ borderColor: 'rgba(79,140,255,0.14)', background: 'radial-gradient(circle at top, rgba(12,22,36,0.94), rgba(4,8,14,0.98))' }}>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Bridge view</div>
-                        <div className="mt-1 text-[18px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Live swarm topology</div>
-                      </div>
-                      <div className="premium-chip" style={{ color: 'var(--accent)' }}>
-                        <Terminal size={11} />
-                        Real CLI
-                      </div>
-                    </div>
-
-                    <div className="mt-5 rounded-[24px] border p-4" style={{ borderColor: 'rgba(79,140,255,0.12)', background: 'rgba(2,7,14,0.82)' }}>
-                      <div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--accent)' }}>
-                        <span className="h-2 w-2 rounded-full animate-pulse" style={{ background: 'var(--accent)' }} />
-                        Coordination layer
-                      </div>
-                      <div className="mt-4 grid gap-3">
-                        <div className="flex items-center justify-between rounded-[18px] border px-4 py-3" style={{ borderColor: 'rgba(79,140,255,0.18)', background: 'rgba(79,140,255,0.08)' }}>
-                          <div>
-                            <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Coordinator</div>
-                            <div className="mt-1 text-[9px] font-mono" style={{ color: 'var(--text-secondary)' }}>Routes tasks · maintains shared objective</div>
-                          </div>
-                          <span className="rounded-full px-2 py-1 text-[8px] font-bold uppercase" style={{ background: 'rgba(40,231,197,0.14)', color: 'var(--secondary)' }}>Live</span>
-                        </div>
-
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          {[
-                            { label: 'Builders', tone: 'var(--info)', detail: 'Implement features and fixes in parallel.' },
-                            { label: 'Scouts', tone: 'var(--secondary)', detail: 'Gather constraints, APIs, and file context.' },
-                            { label: 'Reviewers', tone: 'var(--warning)', detail: 'Verify correctness, regressions, and readiness.' },
-                            { label: 'Custom', tone: 'var(--text-secondary)', detail: 'Handle bespoke operator-defined responsibilities.' },
-                          ].map((item) => (
-                            <div key={item.label} className="rounded-[18px] border px-4 py-3" style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(8,13,22,0.92)' }}>
-                              <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: item.tone }}>{item.label}</div>
-                              <div className="mt-2 text-[10px] leading-5" style={{ color: 'var(--text-secondary)' }}>{item.detail}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-between rounded-[20px] border px-4 py-3" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(5,10,18,0.66)' }}>
-                      <div>
-                        <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator loop</div>
-                        <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>Brief once, watch execution, then intervene only where it matters.</div>
-                      </div>
-                      <span className="text-[9px] font-mono" style={{ color: 'var(--accent)' }}>mission &gt; review</span>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="mb-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                {SWARM_WORKFLOW_COLUMNS.map((item) => {
-                  const ItemIcon = item.icon
-
-                  return (
-                    <div key={item.label} className="swarm-panel-soft p-5">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
-                          <ItemIcon size={15} />
-                        </div>
-                        <div className="text-[9px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>{item.label}</div>
-                      </div>
-                      <div className="mt-4 text-[15px] font-semibold" style={{ color: 'var(--text-primary)' }}>{item.title}</div>
-                      <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{item.body}</div>
-                    </div>
-                  )
-                })}
-              </section>
-            </>
-          )}
-
-          <div ref={wizardRef}>
-          <div className="mb-10 flex flex-wrap items-center justify-center gap-2 md:gap-3">
+      {/* Scrollable content */}
+      <div className="relative z-10 flex-1 overflow-y-auto px-5 py-6 lg:px-8 lg:py-8">
+        <div className="max-w-5xl mx-auto">
+          {/* Wizard step navigation */}
+          <div className="mb-8 flex flex-wrap items-center justify-center gap-2 md:gap-3">
             {SWARM_STEPS.map((item, index) => {
               const complete = index < step
               const active = index === step
+              const StIcon = item.icon
 
               return (
                 <div key={item.id} className="flex items-center gap-2">
                   <button
-                    onClick={() => {
-                      if (index <= step) setStep(index)
-                    }}
-                    className="swarm-step-pill text-[9px] font-bold uppercase tracking-[0.18em]"
+                    onClick={() => { if (index <= step) setStep(index) }}
+                    className="group relative inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-bold uppercase tracking-wider transition-all duration-500 hover:scale-105"
                     style={{
-                      borderColor: active ? 'rgba(79,140,255,0.34)' : complete ? 'rgba(46,213,115,0.24)' : 'rgba(255,255,255,0.08)',
-                      background: active ? 'rgba(79,140,255,0.14)' : complete ? 'rgba(46,213,115,0.1)' : 'rgba(7,12,20,0.42)',
-                      color: active ? 'var(--accent)' : complete ? 'var(--success)' : 'var(--text-muted)',
-                      boxShadow: active ? '0 12px 36px rgba(79,140,255,0.16)' : 'none',
+                      borderColor: active ? 'rgba(79,140,255,0.4)' : complete ? 'rgba(46,213,115,0.3)' : 'rgba(255,255,255,0.1)',
+                      background: active ? 'rgba(79,140,255,0.15)' : complete ? 'rgba(46,213,115,0.1)' : 'rgba(255,255,255,0.05)',
+                      color: active ? '#4f8cff' : complete ? '#2ed573' : 'rgba(255,255,255,0.5)',
+                      backdropFilter: 'blur(12px)',
+                      boxShadow: active ? '0 8px 32px rgba(79,140,255,0.2)' : 'none',
                     }}
                   >
-                    {complete ? <Check size={10} /> : <span>{index + 1}</span>}
+                    {complete ? <Check size={12} /> : <StIcon size={12} />}
                     {item.label}
                   </button>
                   {index < SWARM_STEPS.length - 1 && (
-                    <span className="swarm-step-connector" />
+                    <div className="w-6 h-px" style={{ background: complete ? 'rgba(46,213,115,0.3)' : 'rgba(255,255,255,0.1)' }} />
                   )}
                 </div>
               )
             })}
           </div>
 
-          <div className="mb-6 grid gap-3 lg:grid-cols-4">
-            <div className="premium-stat px-4 py-4">
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission profile</div>
-              <div className="mt-2 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{missionProfile}</div>
-              <div className="mt-1 text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{objectiveWordCount} words in brief</div>
+          {/* Progress bar */}
+          <div className="mb-8 mx-auto max-w-md">
+            <div className="h-1 w-full rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${progressPercent}%`, background: 'linear-gradient(90deg, #4f8cff, #28e7c5)' }} />
             </div>
-            <div className="premium-stat px-4 py-4">
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Bound root</div>
-              <div className="mt-2 text-[13px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{directoryLeaf}</div>
-              <div className="mt-1 text-[10px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>{workDir || 'Awaiting directory'}</div>
-            </div>
-            <div className="premium-stat px-4 py-4">
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Context envelope</div>
-              <div className="mt-2 text-[13px] font-semibold" style={{ color: knowledgeFiles.length > 0 || selectedDirectiveCount > 0 || contextNotes.trim() ? 'var(--success)' : 'var(--text-primary)' }}>
-                {knowledgeLabel}
-              </div>
-              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{selectedDirectiveCount} directives · {contextNotes.trim() ? 'notes linked' : 'no notes'}</div>
-            </div>
-            <div className="premium-stat px-4 py-4">
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Fleet posture</div>
-              <div className="mt-2 text-[13px] font-semibold" style={{ color: readyToLaunch ? 'var(--success)' : 'var(--warning)' }}>
-                {readyToLaunch ? 'Launch-ready' : 'Configuring'}
-              </div>
-              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>{activePreset ? `${activePreset.label} preset selected` : 'Custom roster in progress'}</div>
+            <div className="mt-2 flex items-center justify-between text-xs font-mono" style={{ color: 'rgba(255,255,255,0.4)' }}>
+              <span>Step {step + 1} of {SWARM_STEPS.length}</span>
+              <span>{progressPercent}% complete</span>
             </div>
           </div>
 
+          {/* Stats row */}
+          <div className="mb-8 grid gap-3 grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: 'Profile', value: missionProfile, detail: `${objectiveWordCount} words` },
+              { label: 'Directory', value: directoryLeaf, detail: workDir || 'Awaiting path' },
+              { label: 'Context', value: knowledgeLabel, detail: `${selectedDirectiveCount} directives` },
+              { label: 'Fleet', value: readyToLaunch ? 'Ready' : 'Configuring', detail: `${totalAgents} agents`, ready: readyToLaunch },
+            ].map((stat) => (
+              <div key={stat.label} className="group relative overflow-hidden rounded-2xl border border-white/10 hover:border-white/20 transition-all duration-500 hover:scale-[1.02]" style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(16px)' }}>
+                <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="relative p-4">
+                  <div className="text-xs font-mono uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.4)' }}>{stat.label}</div>
+                  <div className="mt-2 text-base font-bold text-white truncate">{stat.value}</div>
+                  <div className="mt-1 text-xs truncate" style={{ color: 'rgba(255,255,255,0.5)' }}>{stat.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Step content */}
           {renderStepContent()}
-          </div>
-
-          {step === 0 && (
-            <>
-              <section className="mt-12">
-                <div className="mb-5 text-center">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>Role lanes</div>
-                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                    Specialist roles that keep the swarm shipping.
-                  </h2>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                  {ROLE_OPTIONS.map((role) => {
-                    const RoleIcon = role.icon
-
-                    return (
-                      <div key={role.id} className="swarm-panel-soft p-5">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-2xl" style={{ background: `${role.color}18`, color: role.color }}>
-                          <RoleIcon size={16} />
-                        </div>
-                        <div className="mt-4 text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>{role.label}</div>
-                        <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{role.description}</div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </section>
-
-              <section className="mt-12">
-                <div className="mb-5 text-center">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>Why it stands out</div>
-                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                    Enterprise-grade swarm features that close the gaps.
-                  </h2>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {SWARM_ADVANTAGES.map((item) => {
-                    const ItemIcon = item.icon
-
-                    return (
-                      <div key={item.title} className="swarm-panel-soft p-5">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>
-                          <ItemIcon size={15} />
-                        </div>
-                        <div className="mt-4 text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>{item.title}</div>
-                        <div className="mt-2 text-[11px] leading-6" style={{ color: 'var(--text-secondary)' }}>{item.body}</div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </section>
-
-              <section ref={playbookRef} className="mt-12">
-                <div className="mb-5 text-center">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>Playbook</div>
-                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                    How SloerSwarm turns AI agents into an engineering team.
-                  </h2>
-                </div>
-                <div className="mx-auto max-w-4xl space-y-4">
-                  {SWARM_PLAYBOOK_SECTIONS.map((section) => (
-                    <article key={section.title} className="swarm-panel-soft p-6 md:p-7">
-                      <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--accent)' }}>Operating note</div>
-                      <h3 className="mt-3 text-[22px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                        {section.title}
-                      </h3>
-                      <p className="mt-3 text-[12px] leading-7" style={{ color: 'var(--text-secondary)' }}>
-                        {section.body}
-                      </p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-
-              <section ref={faqRef} className="mt-12">
-                <div className="mb-5 text-center">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: 'var(--text-muted)' }}>FAQ</div>
-                  <h2 className="mt-3 text-[30px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-                    SloerSwarm FAQ
-                  </h2>
-                </div>
-                <div className="mx-auto max-w-4xl space-y-3">
-                  {SWARM_FAQ.map((item) => {
-                    const open = expandedFaqId === item.id
-
-                    return (
-                      <div key={item.id} className="swarm-panel-soft overflow-hidden">
-                        <button
-                          onClick={() => setExpandedFaqId(open ? null : item.id)}
-                          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
-                        >
-                          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{item.question}</span>
-                          <ChevronDown
-                            size={16}
-                            style={{
-                              color: open ? 'var(--accent)' : 'var(--text-muted)',
-                              transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-                              transition: 'transform 0.2s ease',
-                            }}
-                          />
-                        </button>
-                        {open && (
-                          <div className="px-5 pb-5 text-[12px] leading-7" style={{ color: 'var(--text-secondary)' }}>
-                            {item.answer}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </section>
-            </>
-          )}
         </div>
       </div>
 
-      <div className="shrink-0 px-5 py-4 lg:px-7 swarm-content">
-        <div className="max-w-6xl mx-auto swarm-floating-footer px-5 py-4 md:px-6">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              {step === 0 ? (
-                <button onClick={() => setView('home')} className="btn-ghost text-[11px]">Cancel</button>
-              ) : (
-                <button onClick={() => setStep((current) => Math.max(0, current - 1))} className="btn-ghost text-[11px] inline-flex items-center gap-2">
-                  <ArrowLeft size={12} /> Back
-                </button>
-              )}
-            </div>
-
-            <div className="hidden md:flex items-center gap-2 text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
-              <span>STEP {step + 1} OF {SWARM_STEPS.length}</span>
-              <span>•</span>
-              <span>{progressPercent}%</span>
-              <span>•</span>
-              <span>{swarmName.trim() || 'Untitled swarm'}</span>
-              <span>•</span>
-              <span>{totalAgents} agents</span>
-              {knowledgeFiles.length > 0 && (
-                <>
-                  <span>•</span>
-                  <span>{knowledgeFiles.length} files</span>
-                </>
-              )}
-            </div>
-
-            {step === SWARM_STEPS.length - 1 ? (
-              <button
-                onClick={handleLaunch}
-                disabled={!readyToLaunch}
-                className="btn-primary inline-flex items-center gap-2 text-[12px] disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ background: 'linear-gradient(135deg, var(--accent), rgba(40,231,197,0.82))', color: '#04111d', minWidth: '160px', justifyContent: 'center' }}
-              >
-                <Rocket size={14} /> Launch Swarm
+      {/* Footer */}
+      <div className="relative z-10 shrink-0 px-5 py-4 lg:px-8" style={{ borderTop: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(20px)' }}>
+        <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            {step === 0 ? (
+              <button onClick={() => setView('home')} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white/70 hover:bg-white/10 transition-all">
+                Cancel
               </button>
             ) : (
-              <button
-                onClick={() => canContinue && setStep((current) => Math.min(SWARM_STEPS.length - 1, current + 1))}
-                disabled={!canContinue}
-                className="btn-primary inline-flex items-center gap-2 text-[12px] disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ minWidth: '128px', justifyContent: 'center' }}
-              >
-                Next <ArrowRight size={14} />
+              <button onClick={() => setStep((current) => Math.max(0, current - 1))} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white/70 hover:bg-white/10 transition-all inline-flex items-center gap-2">
+                <ArrowLeft size={12} /> Back
               </button>
             )}
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-4">
-            <div className="premium-stat px-4 py-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Swarm</div>
-              <div className="mt-2 text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{swarmName.trim() || 'Pending name'}</div>
-            </div>
-            <div className="premium-stat px-4 py-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Directory</div>
-              <div className="mt-2 text-[11px] font-mono truncate" style={{ color: 'var(--text-secondary)' }}>{workDir || 'Not set'}</div>
-            </div>
-            <div className="premium-stat px-4 py-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Roster</div>
-              <div className="mt-2 text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{totalAgents} configured agents</div>
-            </div>
-            <div className="premium-stat px-4 py-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Mission</div>
-              <div className="mt-2 flex items-center gap-2 text-[12px] font-semibold" style={{ color: readyToLaunch ? 'var(--success)' : 'var(--warning)' }}>
-                <Target size={13} />
-                {readyToLaunch ? 'Ready to launch' : 'Needs input'}
-              </div>
-            </div>
+          <div className="hidden md:flex items-center gap-3 text-xs font-mono" style={{ color: 'rgba(255,255,255,0.4)' }}>
+            <span>{swarmName.trim() || 'Untitled'}</span>
+            <span className="w-1 h-1 rounded-full bg-white/20" />
+            <span>{totalAgents} agents</span>
+            <span className="w-1 h-1 rounded-full bg-white/20" />
+            <span>{progressPercent}%</span>
           </div>
+
+          {step === SWARM_STEPS.length - 1 ? (
+            <button
+              onClick={handleLaunch}
+              disabled={!readyToLaunch}
+              className="relative overflow-hidden rounded-2xl px-8 py-3 text-sm font-bold disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-500 hover:scale-105 inline-flex items-center gap-2"
+              style={{ background: 'linear-gradient(135deg, #4f8cff, #28e7c5)', color: '#04111d', boxShadow: readyToLaunch ? '0 12px 40px rgba(79,140,255,0.3)' : 'none' }}
+            >
+              <Rocket size={14} /> Launch Swarm
+            </button>
+          ) : (
+            <button
+              onClick={() => canContinue && setStep((current) => Math.min(SWARM_STEPS.length - 1, current + 1))}
+              disabled={!canContinue}
+              className="rounded-2xl px-8 py-3 text-sm font-bold disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-500 hover:scale-105 inline-flex items-center gap-2"
+              style={{ background: 'rgba(79,140,255,0.2)', color: '#4f8cff', border: '1px solid rgba(79,140,255,0.3)' }}
+            >
+              Next <ArrowRight size={14} />
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -71,13 +71,12 @@ function TaskCard({
     <div
       data-task-id={task.id}
       onPointerDown={(e) => onPointerDown(e, task.id, task.column)}
-      className="group relative rounded-[18px] transition-all duration-300 select-none touch-none"
+      className="group relative rounded-[18px] transition-all duration-300 select-none touch-none liquid-glass hover-lift-3d"
       style={{
-        background: 'linear-gradient(180deg, rgba(10,17,28,0.92), rgba(8,13,22,0.96))',
         border: `1px solid ${isDragging ? 'var(--accent)' : 'var(--border)'}`,
         opacity: isDragging ? 0.3 : 1,
-        transform: justMoved ? 'scale(1.03)' : 'none',
-        boxShadow: justMoved ? '0 0 20px rgba(79,140,255,0.25)' : 'none',
+        transform: justMoved ? 'scale(1.03)' : undefined,
+        boxShadow: justMoved ? '0 0 20px rgba(79,140,255,0.25)' : undefined,
         cursor: 'grab',
       }}
     >

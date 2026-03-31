@@ -50,7 +50,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="h-full flex items-center justify-center p-6" style={{ background: 'radial-gradient(circle at top, rgba(79,140,255,0.12), transparent 22%), linear-gradient(180deg, rgba(3,5,10,1), rgba(5,9,16,1))' }}>
+    <div className="h-full flex items-center justify-center p-6 aurora-bg particle-field" style={{ background: 'radial-gradient(circle at top, rgba(79,140,255,0.12), transparent 22%), linear-gradient(180deg, rgba(3,5,10,1), rgba(5,9,16,1))' }}>
       {/* Background effects */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -left-32 top-1/4 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(79,140,255,0.12),transparent_60%)] blur-3xl" />
@@ -60,7 +60,7 @@ export function LoginPage() {
 
       <div className="relative z-10 w-full max-w-[1120px] grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
         {/* Left — Branding */}
-        <div className="hidden xl:flex flex-col justify-between rounded-[34px] border p-8 premium-panel-elevated premium-card-shell" style={{ borderColor: 'rgba(170,221,255,0.12)', background: 'linear-gradient(180deg, rgba(8,13,22,0.88), rgba(4,8,14,0.96))' }}>
+        <div className="hidden xl:flex flex-col justify-between rounded-[34px] p-8 card-3d liquid-glass-heavy premium-card-shell" style={{ borderColor: 'rgba(170,221,255,0.12)' }}>
           <div>
             <div className="flex items-center gap-3 mb-6">
               <div className="h-12 w-12 rounded-2xl overflow-hidden ring-1 ring-white/10">

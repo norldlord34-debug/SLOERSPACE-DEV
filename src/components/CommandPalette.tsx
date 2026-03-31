@@ -5,7 +5,7 @@ import { useCallback } from 'react'
 import { useStore } from '@/store/useStore'
 import {
   Search, Terminal, Kanban, Bot, FileText, Settings, Zap, Home,
-  Sparkles, X, ArrowRight, Hash, Layers
+  Sparkles, X, ArrowRight, Hash, Layers, Globe, BookOpen, Server, KeyRound, MonitorPlay, Share2, ImageIcon, History, BarChart3, Activity, Network, BookMarked
 } from 'lucide-react'
 
 interface PaletteItem {
@@ -30,8 +30,9 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const {
-    setView, workspaceTabs, setActiveTab, kanbanTasks,
+    setView, workspaceTabs, setActiveTab, kanbanTasks, setWizardStep, setWizardLayout, setWizardAgentConfig,
     customAgents, prompts, commandSnippets, starredCommands, terminalSessions, primeTerminalCommand,
+    workspacePresets, launchWorkspace,
   } = useStore()
 
   const openTerminalWithCommand = useCallback((command: string, preferredWorkspaceId?: string) => {
@@ -58,13 +59,53 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
       { id: 'nav-prompts', label: 'Go to Prompts', description: 'Prompt system library', icon: FileText, category: 'navigation', action: () => { setView('prompts'); onClose() }, keywords: ['prompts', 'templates', 'library'] },
       { id: 'nav-settings', label: 'Go to Settings', description: 'Executive settings', icon: Settings, category: 'navigation', action: () => { setView('settings'); onClose() }, keywords: ['settings', 'config', 'preferences'] },
       { id: 'nav-swarm', label: 'Launch SloerSwarm', description: 'Multi-agent coordination', icon: Zap, category: 'navigation', action: () => { setView('swarm-launch'); onClose() }, keywords: ['swarm', 'multi', 'agent', 'parallel'] },
+      { id: 'nav-browser', label: 'Open Browser', description: 'Native WebView2 browser', icon: Globe, category: 'navigation', action: () => { setView('browser'); onClose() }, keywords: ['browser', 'web', 'internet', 'google', 'url', 'search'] },
+      { id: 'nav-editor', label: 'Open Code Editor', description: 'Monaco editor with file explorer (Ctrl+E)', icon: Layers, category: 'navigation', action: () => { setView('editor'); onClose() }, keywords: ['editor', 'code', 'file', 'monaco', 'edit', 'open'] },
+      { id: 'nav-notebook', label: 'Open Notebook', description: 'Runbooks with executable cells (Ctrl+Shift+N)', icon: BookOpen, category: 'navigation', action: () => { setView('notebook'); onClose() }, keywords: ['notebook', 'runbook', 'notes', 'cells', 'markdown'] },
+      { id: 'nav-ssh', label: 'Open SSH Manager', description: 'Saved connections & remote shells (Ctrl+Shift+S)', icon: Server, category: 'navigation', action: () => { setView('ssh'); onClose() }, keywords: ['ssh', 'remote', 'server', 'connect', 'linux'] },
+      { id: 'nav-env', label: 'Env Var Manager', description: 'Manage environment variables & .env files (Ctrl+Shift+E)', icon: KeyRound, category: 'navigation', action: () => { setView('env'); onClose() }, keywords: ['env', 'environment', 'variable', 'secret', 'key', 'dotenv'] },
+      { id: 'nav-preview', label: 'Preview Panel', description: 'Live localhost preview (Ctrl+Shift+P)', icon: MonitorPlay, category: 'navigation', action: () => { setView('preview'); onClose() }, keywords: ['preview', 'localhost', 'browser', 'dev server', 'port', 'live'] },
+      { id: 'nav-sessions', label: 'Session Sharing', description: 'Export/import workspace sessions (Ctrl+Shift+X)', icon: Share2, category: 'navigation', action: () => { setView('sessions'); onClose() }, keywords: ['session', 'share', 'export', 'import', 'workspace', 'backup'] },
+      { id: 'nav-file-preview', label: 'File Preview', description: 'Preview images, markdown, JSON, code files (Ctrl+Shift+F)', icon: ImageIcon, category: 'navigation', action: () => { setView('file-preview'); onClose() }, keywords: ['file', 'preview', 'image', 'markdown', 'json', 'open', 'view'] },
+      { id: 'nav-history', label: 'Command History', description: 'Search across all terminal command histories (Ctrl+Shift+H)', icon: History, category: 'navigation', action: () => { setView('history'); onClose() }, keywords: ['history', 'command', 'search', 'terminal', 'previous', 'ran'] },
+      { id: 'nav-codebase', label: 'Codebase Indexer', description: 'Language stats, LOC counter, largest files (Ctrl+Shift+I)', icon: BarChart3, category: 'navigation', action: () => { setView('codebase'); onClose() }, keywords: ['codebase', 'index', 'language', 'stats', 'loc', 'lines', 'code'] },
+      { id: 'nav-system', label: 'System Monitor', description: 'CPU, RAM, disk, top processes with live sparklines (Ctrl+Shift+M)', icon: Activity, category: 'navigation', action: () => { setView('system'); onClose() }, keywords: ['system', 'monitor', 'cpu', 'ram', 'memory', 'disk', 'processes', 'stats'] },
+      { id: 'nav-ports', label: 'Port Manager', description: 'Scan active ports, kill processes by PID (Ctrl+Shift+O)', icon: Network, category: 'navigation', action: () => { setView('ports'); onClose() }, keywords: ['port', 'ports', 'network', 'pid', 'kill', 'process', 'listening'] },
+      { id: 'nav-snippets', label: 'Snippet Manager', description: 'Reusable command/code snippets with search (Ctrl+Shift+Q)', icon: BookMarked, category: 'navigation', action: () => { setView('snippets'); onClose() }, keywords: ['snippet', 'snippets', 'command', 'shortcut', 'reuse', 'library'] },
+      { id: 'nav-ai-chat', label: 'Open AI Chat', description: 'AI assistant (Ctrl+J)', icon: Sparkles, category: 'navigation', action: () => { onClose() }, keywords: ['ai', 'chat', 'assistant', 'claude', 'gpt', 'gemini', 'ollama', 'ask'] },
+      { id: 'nav-ai-settings', label: 'AI Provider Settings', description: 'Configure API keys & models', icon: Settings, category: 'navigation', action: () => { setView('settings'); onClose() }, keywords: ['ai', 'api', 'key', 'provider', 'ollama', 'openai', 'anthropic'] },
     ]
 
+    const presetItems: PaletteItem[] = workspacePresets.map((preset) => ({
+      id: `preset-${preset.id}`,
+      label: `Launch: ${preset.name}`,
+      description: `${preset.layoutCount === 1 ? 'Single' : `${preset.layoutCount} panes`} · ${preset.workingDirectory.split(/[\/]/).pop() || preset.workingDirectory}`,
+      icon: BookMarked,
+      category: 'workspace' as const,
+      action: () => {
+        const cfg = { claude: 0, codex: 0, gemini: 0, opencode: 0, cursor: 0, droid: 0, copilot: 0 } as Record<import('@/store/useStore').AgentCli, number>
+        Object.entries(preset.agentConfig).forEach(([k, v]) => { if (k in cfg) cfg[k as import('@/store/useStore').AgentCli] = v as number })
+        setWizardLayout(preset.layoutCount)
+        setWizardAgentConfig(cfg)
+        launchWorkspace({
+          workingDirectory: preset.workingDirectory,
+          agentConfig: cfg,
+          customBootstrapCommand: preset.customCommand?.trim() || undefined,
+          name: preset.name,
+        })
+        onClose()
+      },
+      keywords: [preset.name.toLowerCase(), 'preset', 'launch', 'workspace'],
+    }))
+
     const actionItems: PaletteItem[] = [
-      { id: 'act-workspace', label: 'New Workspace', description: 'Create a new terminal workspace', icon: Terminal, category: 'action', action: () => { setView('workspace-wizard'); onClose() }, keywords: ['new', 'workspace', 'create', 'terminal'] },
+      { id: 'act-workspace', label: 'New Workspace', description: 'Create a new terminal workspace', icon: Terminal, category: 'action', action: () => { setWizardStep(1); setView('workspace-wizard'); onClose() }, keywords: ['new', 'workspace', 'create', 'terminal'] },
       { id: 'act-swarm', label: 'New Swarm Session', description: 'Launch parallel agent execution', icon: Zap, category: 'action', action: () => { setView('swarm-launch'); onClose() }, keywords: ['new', 'swarm', 'launch'] },
       { id: 'act-git-status', label: 'Prime Git Status', description: 'Open or create a terminal workflow for git status', icon: Terminal, category: 'action', action: () => openTerminalWithCommand('git status'), keywords: ['git', 'status', 'repo'] },
       { id: 'act-run-tests', label: 'Prime Test Command', description: 'Queue a common test command in the terminal', icon: Terminal, category: 'action', action: () => openTerminalWithCommand('npm test'), keywords: ['test', 'jest', 'vitest', 'qa'] },
+      { id: 'act-browser', label: 'New Browser Tab', description: 'Open browser with a new tab', icon: Globe, category: 'action', action: () => { setView('browser'); onClose() }, keywords: ['browser', 'tab', 'web', 'new'] },
+      { id: 'act-browse-github', label: 'Browse GitHub', description: 'Open GitHub in browser', icon: Globe, category: 'action', action: () => { setView('browser'); onClose() }, keywords: ['github', 'repo', 'git', 'browse'] },
+      { id: 'act-browse-docs', label: 'Browse Documentation', description: 'Open MDN / docs in browser', icon: Globe, category: 'action', action: () => { setView('browser'); onClose() }, keywords: ['docs', 'documentation', 'mdn', 'reference'] },
     ]
 
     const workspaceItems: PaletteItem[] = workspaceTabs.map((tab) => ({
@@ -185,8 +226,8 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
       keywords: [command.toLowerCase(), 'favorite', 'starred', 'terminal'],
     }))
 
-    return [...navItems, ...actionItems, ...recentRuntimeCommandItems, ...favoriteCommandItems, ...snippetItems, ...workspaceItems, ...taskItems, ...agentItems, ...promptItems]
-  }, [setView, onClose, workspaceTabs, setActiveTab, kanbanTasks, customAgents, prompts, commandSnippets, starredCommands, terminalSessions, openTerminalWithCommand])
+    return [...presetItems, ...navItems, ...actionItems, ...recentRuntimeCommandItems, ...favoriteCommandItems, ...snippetItems, ...workspaceItems, ...taskItems, ...agentItems, ...promptItems]
+  }, [setView, onClose, workspaceTabs, setActiveTab, kanbanTasks, customAgents, prompts, commandSnippets, starredCommands, terminalSessions, openTerminalWithCommand, workspacePresets, launchWorkspace, setWizardStep, setWizardLayout, setWizardAgentConfig])
 
   const filtered = useMemo(() => {
     if (!query.trim()) return items.slice(0, 20)
@@ -248,8 +289,8 @@ export function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: 
     <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh]">
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative z-10 w-full max-w-[580px] overflow-hidden rounded-[24px] border border-[var(--border)] shadow-2xl"
-        style={{ background: 'var(--surface-0)' }}
+        className="relative z-10 w-full max-w-[580px] overflow-hidden rounded-[24px] border border-[var(--border)] shadow-2xl liquid-glass-heavy"
+        style={{ background: 'rgba(3,5,10,0.85)' }}
       >
         <div className="flex items-center gap-3 border-b border-[var(--border)] px-5 py-4">
           <Search size={18} style={{ color: 'var(--text-muted)' }} />

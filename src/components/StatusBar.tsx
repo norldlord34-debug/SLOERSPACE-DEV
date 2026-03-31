@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { getTerminalCapabilities, TerminalCapabilities } from '@/lib/desktop'
+import { getAppVersion } from '@/lib/desktop'
 import { useStore } from '@/store/useStore'
-import { Terminal, Layers, Zap, CheckCircle, Cpu, Activity, ShieldCheck } from 'lucide-react'
+import { Terminal, Layers, Zap, CheckCircle, Activity } from 'lucide-react'
 
 export function StatusBar() {
-  const { workspaceTabs, terminalSessions, kanbanTasks, customAgents, theme, userProfile, isLoggedIn, isPro, isTrialActive } = useStore()
-  const [capabilities, setCapabilities] = useState<TerminalCapabilities | null>(null)
+  const { workspaceTabs, terminalSessions, kanbanTasks, theme, userProfile, isLoggedIn, isPro, isTrialActive } = useStore()
+  const [appVersion, setAppVersion] = useState('0.1.0')
 
   const completedTasks = kanbanTasks.filter((t) => t.column === 'complete').length
   const totalTasks = kanbanTasks.length
@@ -18,96 +18,87 @@ export function StatusBar() {
     () => Object.values(terminalSessions).flat(),
     [terminalSessions],
   )
-  const runtimeSessionCount = runtimePanes.filter((pane) => pane.runtimeSessionId).length
-  const hydratedRuntimeSessions = runtimePanes.filter((pane) => pane.runtimeSession).length
   const activeRuntimeExecutions = runtimePanes.filter((pane) => pane.isRunning || pane.runtimeSession?.isRunning).length
-  const runtimeMode = useMemo(() => {
-    const runtimeSnapshotMode = runtimePanes.find((pane) => pane.runtimeSession?.executionMode)?.runtimeSession?.executionMode
-    return runtimeSnapshotMode || capabilities?.executionMode || 'persistent-pty-shell'
-  }, [capabilities?.executionMode, runtimePanes])
-  const runtimeBackendKind = useMemo(() => {
-    const runtimeSnapshotBackend = runtimePanes.find((pane) => pane.runtimeSession?.backendKind)?.runtimeSession?.backendKind
-    return runtimeSnapshotBackend || capabilities?.backendKind || 'persistent-pty'
-  }, [capabilities?.backendKind, runtimePanes])
-
   useEffect(() => {
     let cancelled = false
-
-    void getTerminalCapabilities().then((nextCapabilities) => {
-      if (!cancelled && nextCapabilities) {
-        setCapabilities(nextCapabilities)
-      }
-    })
-
-    return () => {
-      cancelled = true
-    }
+    void getAppVersion().then((v) => { if (!cancelled) setAppVersion(v) })
+    return () => { cancelled = true }
   }, [])
+
+  const activeWorkspace = workspaceTabs.find((t) => t.isActive) ?? workspaceTabs[workspaceTabs.length - 1] ?? null
+  const totalPanes = runtimePanes.length
 
   return (
     <div
-      className="h-[28px] flex items-center justify-between px-4 text-[10px] font-mono select-none shrink-0 border-t border-[var(--border)]"
-      style={{ background: 'var(--surface-0)', color: 'var(--text-muted)' }}
+      className="h-[26px] flex items-center justify-between px-4 select-none shrink-0 border-t border-[var(--border)]"
+      style={{ color: 'var(--text-muted)', borderRadius: 0, background: 'rgba(4,8,14,0.82)', backdropFilter: 'blur(12px)' }}
     >
-      <div className="flex items-center gap-4">
+      {/* LEFT — connection + workspace */}
+      <div className="flex items-center gap-3 text-[9.5px] font-mono">
         <span className="flex items-center gap-1.5">
-          <span className="w-[6px] h-[6px] rounded-full" style={{ background: isLoggedIn ? 'var(--success)' : 'var(--warning)', boxShadow: isLoggedIn ? '0 0 6px var(--success)' : 'none' }} />
+          <span className="w-[5px] h-[5px] rounded-full shrink-0" style={{ background: isLoggedIn ? 'var(--success)' : 'var(--warning)', boxShadow: isLoggedIn ? '0 0 5px var(--success)' : 'none' }} />
           {isLoggedIn ? 'Connected' : 'Offline'}
         </span>
-        <span className="flex items-center gap-1.5">
-          <Terminal size={10} />
-          {workspaceTabs.length} workspaces
+        <span className="w-px h-3" style={{ background: 'rgba(255,255,255,0.08)' }} />
+        <span className="flex items-center gap-1">
+          <Terminal size={9} />
+          {workspaceTabs.length} {workspaceTabs.length === 1 ? 'workspace' : 'workspaces'}
         </span>
-        <span className="flex items-center gap-1.5">
-          <CheckCircle size={10} />
-          {completedTasks}/{totalTasks} tasks
-        </span>
-        <span className="flex items-center gap-1.5">
-          <Cpu size={10} />
-          {customAgents.length} agents
-        </span>
-        <span className="flex items-center gap-1.5">
-          <ShieldCheck size={10} />
-          {runtimeSessionCount} runtime sessions
-        </span>
-        <span className="flex items-center gap-1.5">
-          <Activity size={10} />
-          {hydratedRuntimeSessions}/{runtimeSessionCount || 0} hydrated
-        </span>
+        {totalPanes > 0 && (
+          <>
+            <span className="w-px h-3" style={{ background: 'rgba(255,255,255,0.08)' }} />
+            <span className="flex items-center gap-1">
+              <Layers size={9} />
+              {totalPanes} panes
+            </span>
+          </>
+        )}
         {activeRuntimeExecutions > 0 && (
-          <span className="flex items-center gap-1.5" style={{ color: 'var(--accent)' }}>
-            <Activity size={10} className="animate-pulse" />
-            {activeRuntimeExecutions} executing
-          </span>
+          <>
+            <span className="w-px h-3" style={{ background: 'rgba(255,255,255,0.08)' }} />
+            <span className="flex items-center gap-1 animate-pulse" style={{ color: 'var(--accent)' }}>
+              <Activity size={9} />
+              {activeRuntimeExecutions} running
+            </span>
+          </>
+        )}
+        {totalTasks > 0 && (
+          <>
+            <span className="w-px h-3" style={{ background: 'rgba(255,255,255,0.08)' }} />
+            <span className="flex items-center gap-1" style={{ color: completedTasks === totalTasks ? 'var(--success)' : 'var(--text-muted)' }}>
+              <CheckCircle size={9} />
+              {completedTasks}/{totalTasks}
+            </span>
+          </>
         )}
       </div>
-      <div className="flex items-center gap-4">
-        <span className="flex items-center gap-1.5">
-          <Terminal size={10} />
-          {runtimeMode}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <ShieldCheck size={10} />
-          {runtimeBackendKind}
-        </span>
+
+      {/* CENTER — active workspace name */}
+      {activeWorkspace && (
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: activeWorkspace.color }} />
+          {activeWorkspace.name}
+        </div>
+      )}
+
+      {/* RIGHT — version + plan */}
+      <div className="flex items-center gap-3 text-[9.5px] font-mono">
         {isLoggedIn && (
-          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider"
+          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[7.5px] font-bold uppercase tracking-wider"
             style={{
-              background: trialActive ? 'rgba(255,191,98,0.12)' : hasPremiumAccess ? 'rgba(79,140,255,0.12)' : 'rgba(255,255,255,0.05)',
+              background: trialActive ? 'rgba(255,191,98,0.1)' : hasPremiumAccess ? 'rgba(79,140,255,0.1)' : 'rgba(255,255,255,0.04)',
               color: trialActive ? 'var(--warning)' : hasPremiumAccess ? 'var(--accent)' : 'var(--text-muted)',
-              border: `1px solid ${trialActive ? 'rgba(255,191,98,0.2)' : hasPremiumAccess ? 'rgba(79,140,255,0.2)' : 'var(--border)'}`,
+              border: `1px solid ${trialActive ? 'rgba(255,191,98,0.18)' : hasPremiumAccess ? 'rgba(79,140,255,0.18)' : 'var(--border)'}`,
             }}>
             {accessLabel}
           </span>
         )}
-        <span className="flex items-center gap-1.5">
-          <Zap size={10} style={{ color: 'var(--warning)' }} />
-          v0.1.0
+        <span className="flex items-center gap-1">
+          <Zap size={9} style={{ color: 'var(--warning)' }} />
+          v{appVersion}
         </span>
-        <span className="flex items-center gap-1.5">
-          <Layers size={10} />
-          {theme}
-        </span>
+        <span className="w-px h-3" style={{ background: 'rgba(255,255,255,0.08)' }} />
+        <span className="max-w-[80px] truncate" style={{ color: 'var(--text-muted)' }}>{theme}</span>
       </div>
     </div>
   )

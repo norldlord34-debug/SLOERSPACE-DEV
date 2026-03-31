@@ -11,7 +11,7 @@ use std::{
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::time::{timeout, Duration};
 
 #[derive(Clone, Copy)]
@@ -70,8 +70,26 @@ const GITHUB_RELEASES_API_URL: &str =
 const GITHUB_RELEASES_PAGE_URL: &str =
     "https://github.com/nordlar49-design/SLOERSPACE-DEV/releases/latest";
 const APP_UPDATE_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
-const AGENT_CLI_IDS: [&str; 5] = ["claude", "codex", "gemini", "opencode", "cursor"];
+const AGENT_CLI_IDS: [&str; 7] = ["claude", "codex", "gemini", "opencode", "cursor", "droid", "copilot"];
 
+/// # Mutex Lock Ordering Invariant
+///
+/// To prevent deadlocks, always acquire these global mutexes in the following order:
+///
+/// 1. `RUNNING_PROCESSES`
+/// 2. `RUNNING_PTY_COMMANDS`
+/// 3. `CANCELLED_COMMANDS`
+/// 4. `TERMINAL_SESSIONS`
+/// 5. `PERSISTENT_PTY_SESSIONS`
+/// 6. `ACTIVE_PTY_READERS`
+///
+/// **Rule**: Never hold a higher-numbered lock while trying to acquire a lower-numbered one.
+/// Most functions only need one lock at a time. The critical paths that touch multiple
+/// locks (e.g. `terminate_running_process_with_mode`) already follow this ordering.
+///
+/// **PTY Session Locks** (per-session, inside `PersistentPtySession`):
+/// - `execution_lock` → `writer` → `reader` → `master` → `child`
+/// - These are session-scoped and independent of the global ordering above.
 static RUNNING_PROCESSES: LazyLock<Mutex<HashMap<String, Option<u32>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static RUNNING_PTY_COMMANDS: LazyLock<Mutex<HashMap<String, String>>> =
@@ -1819,6 +1837,14 @@ async fn execute_terminal_command(
         return Err("Command is too long".to_string());
     }
 
+    let lowercase = trimmed.to_ascii_lowercase();
+    const BLOCKED_PREFIXES: &[&str] = &["format ", "format.", "diskpart", "rm -rf /", "del /s /q c:\\", "rd /s /q c:\\"];
+    for prefix in BLOCKED_PREFIXES {
+        if lowercase.starts_with(prefix) {
+            return Err("This command is blocked for safety. Use a native terminal if you need to run destructive system commands.".to_string());
+        }
+    }
+
     let resolved_cwd = resolve_working_directory(cwd)?;
 
     if let Some(cd_result) = resolve_cd_target(trimmed, &resolved_cwd) {
@@ -2492,6 +2518,11 @@ async fn list_directory_contents(cwd: String, prefix: Option<String>) -> Result<
     let resolved = resolve_working_directory(&cwd)?;
     let target = if let Some(ref p) = prefix {
         let candidate = resolved.join(p);
+        let candidate_canonical = candidate.canonicalize().unwrap_or(candidate.clone());
+        let resolved_canonical = resolved.canonicalize().unwrap_or(resolved.clone());
+        if !candidate_canonical.starts_with(&resolved_canonical) {
+            return Err("Path traversal outside working directory is not allowed.".to_string());
+        }
         if candidate.is_dir() {
             candidate
         } else {
@@ -2588,6 +2619,11 @@ async fn install_app_update() -> Result<String, String> {
         .asset_download_url
         .clone()
         .ok_or_else(|| "Missing installer download URL.".to_string())?;
+
+    if !asset_url.starts_with("https://github.com/") && !asset_url.starts_with("https://objects.githubusercontent.com/") {
+        return Err(format!("Refusing to download installer from untrusted domain: {}", asset_url));
+    }
+
     let asset_name = update
         .asset_name
         .clone()
@@ -2625,9 +2661,999 @@ async fn install_app_update() -> Result<String, String> {
     Ok(clean_path_display(&installer_path))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DroppedFileResult {
+    path: String,
+    escaped_path: String,
+    is_image: bool,
+    is_dir: bool,
+    file_name: String,
+    iterm2_sequence: Option<String>,
+}
+
+fn is_image_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" | "tiff" | "tif"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn escape_path_for_shell(path: &str) -> String {
+    match *WINDOWS_SHELL {
+        WindowsShell::Pwsh | WindowsShell::PowerShell => {
+            if path.contains(' ') || path.contains('(') || path.contains(')') || path.contains('&') {
+                format!("'{}'", path.replace('\'', "''"))
+            } else {
+                path.to_string()
+            }
+        }
+        WindowsShell::Cmd => {
+            if path.contains(' ') || path.contains('&') || path.contains('^') {
+                format!("\"{}\"", path)
+            } else {
+                path.to_string()
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn escape_path_for_shell(path: &str) -> String {
+    if path.contains(' ') || path.contains('(') || path.contains(')') || path.contains('&')
+        || path.contains('\'') || path.contains('"') || path.contains('$') || path.contains('!')
+    {
+        format!("'{}'", path.replace('\'', "'\"'\"'"))
+    } else {
+        path.to_string()
+    }
+}
+
+fn encode_iterm2_inline_image(file_path: &Path) -> Option<String> {
+    let data = std::fs::read(file_path).ok()?;
+    if data.is_empty() || data.len() > 10_485_760 {
+        return None;
+    }
+
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut base64_buf = Vec::with_capacity(data.len() * 4 / 3 + 4);
+    let mut i = 0;
+    while i < data.len() {
+        let b0 = data[i] as u32;
+        let b1 = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
+        let b2 = if i + 2 < data.len() { data[i + 2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        base64_buf.push(alphabet[((triple >> 18) & 0x3F) as usize]);
+        base64_buf.push(alphabet[((triple >> 12) & 0x3F) as usize]);
+        if i + 1 < data.len() {
+            base64_buf.push(alphabet[((triple >> 6) & 0x3F) as usize]);
+        } else {
+            base64_buf.push(b'=');
+        }
+        if i + 2 < data.len() {
+            base64_buf.push(alphabet[(triple & 0x3F) as usize]);
+        } else {
+            base64_buf.push(b'=');
+        }
+        i += 3;
+    }
+    let base64_str = String::from_utf8(base64_buf).ok()?;
+
+    let file_name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image");
+
+    Some(format!(
+        "\x1b]1337;File=name={};size={};inline=1:{}\x07",
+        file_name,
+        data.len(),
+        base64_str,
+    ))
+}
+
+#[tauri::command]
+fn handle_dropped_files(paths: Vec<String>) -> Result<Vec<DroppedFileResult>, String> {
+    let mut results = Vec::with_capacity(paths.len());
+
+    for raw_path in &paths {
+        let path = PathBuf::from(raw_path.trim());
+
+        if !path.exists() {
+            continue;
+        }
+
+        let clean = clean_path_display(&path.canonicalize().unwrap_or_else(|_| path.clone()));
+        let is_dir = path.is_dir();
+        let is_image = !is_dir && is_image_extension(&path);
+        let escaped = escape_path_for_shell(&clean);
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let iterm2_sequence = if is_image {
+            encode_iterm2_inline_image(&path)
+        } else {
+            None
+        };
+
+        results.push(DroppedFileResult {
+            path: clean,
+            escaped_path: escaped,
+            is_image,
+            is_dir,
+            file_name,
+            iterm2_sequence,
+        });
+    }
+
+    Ok(results)
+}
+
+// ── Browser Pane Management (native WebView2 via unstable multi-webview) ──
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPaneInfo {
+    id: String,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+static BROWSER_PANES: LazyLock<Mutex<HashMap<String, BrowserPaneInfo>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[tauri::command]
+async fn browser_create_pane(
+    app: tauri::AppHandle,
+    pane_id: String,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<BrowserPaneInfo, String> {
+    use tauri::webview::WebviewBuilder;
+    use tauri::WebviewUrl;
+
+    let window = app
+        .get_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+
+    let webview_url = WebviewUrl::External(
+        url.parse().map_err(|e| format!("Invalid URL: {}", e))?,
+    );
+
+    let builder = WebviewBuilder::new(&pane_id, webview_url)
+        .transparent(false)
+        .initialization_script("document.documentElement.style.backgroundColor='#0a0e17';document.body.style.backgroundColor='#0a0e17';");
+
+    // Use PhysicalPosition/PhysicalSize — frontend sends physical pixels (CSS * devicePixelRatio)
+    let _webview = window
+        .add_child(
+            builder,
+            tauri::PhysicalPosition::<i32>::new(x as i32, y as i32),
+            tauri::PhysicalSize::<u32>::new(width as u32, height as u32),
+        )
+        .map_err(|e| format!("Failed to create browser pane: {}", e))?;
+
+    let info = BrowserPaneInfo {
+        id: pane_id.clone(),
+        url: url.clone(),
+        x,
+        y,
+        width,
+        height,
+    };
+
+    if let Ok(mut panes) = BROWSER_PANES.lock() {
+        panes.insert(pane_id, info.clone());
+    }
+
+    Ok(info)
+}
+
+#[tauri::command]
+async fn browser_close_pane(app: tauri::AppHandle, pane_id: String) -> Result<(), String> {
+    if let Some(webview) = app.get_webview(&pane_id) {
+        // Hide immediately, then close
+        let _ = webview.hide();
+        webview.close().map_err(|e| format!("Failed to close browser pane: {}", e))?;
+    }
+
+    if let Ok(mut panes) = BROWSER_PANES.lock() {
+        panes.remove(&pane_id);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn browser_navigate_pane(
+    app: tauri::AppHandle,
+    pane_id: String,
+    url: String,
+) -> Result<BrowserPaneInfo, String> {
+    // Navigate in-place using JS — no destroy/recreate
+    if let Some(webview) = app.get_webview(&pane_id) {
+        let safe_url = url.replace('\\', "\\\\").replace('\'', "\\'");
+        let script = format!("window.location.href='{}'", safe_url);
+        webview.eval(&script).map_err(|e| format!("Failed to navigate: {}", e))?;
+    } else {
+        return Err(format!("Browser pane '{}' not found", pane_id));
+    }
+
+    // Update stored URL
+    if let Ok(mut panes) = BROWSER_PANES.lock() {
+        if let Some(info) = panes.get_mut(&pane_id) {
+            info.url = url;
+        }
+    }
+
+    let panes = BROWSER_PANES.lock().map_err(|e| e.to_string())?;
+    panes.get(&pane_id).cloned().ok_or_else(|| "Pane not found after navigate".to_string())
+}
+
+#[tauri::command]
+async fn browser_set_visible(app: tauri::AppHandle, pane_id: String, visible: bool) -> Result<(), String> {
+    if let Some(webview) = app.get_webview(&pane_id) {
+        if visible {
+            webview.show().map_err(|e| format!("Failed to show: {}", e))?;
+        } else {
+            webview.hide().map_err(|e| format!("Failed to hide: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn browser_resize_pane(
+    app: tauri::AppHandle,
+    pane_id: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if let Some(webview) = app.get_webview(&pane_id) {
+        webview
+            .set_position(tauri::PhysicalPosition::<i32>::new(x as i32, y as i32))
+            .map_err(|e| format!("Failed to set position: {}", e))?;
+        webview
+            .set_size(tauri::PhysicalSize::<u32>::new(width as u32, height as u32))
+            .map_err(|e| format!("Failed to set size: {}", e))?;
+    }
+
+    if let Ok(mut panes) = BROWSER_PANES.lock() {
+        if let Some(info) = panes.get_mut(&pane_id) {
+            info.x = x;
+            info.y = y;
+            info.width = width;
+            info.height = height;
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn browser_list_panes() -> Result<Vec<BrowserPaneInfo>, String> {
+    let panes = BROWSER_PANES.lock().map_err(|e| e.to_string())?;
+    Ok(panes.values().cloned().collect())
+}
+
+#[tauri::command]
+async fn browser_toggle_devtools(app: tauri::AppHandle, pane_id: String) -> Result<bool, String> {
+    if let Some(webview) = app.get_webview(&pane_id) {
+        if webview.is_devtools_open() {
+            webview.close_devtools();
+            Ok(false)
+        } else {
+            webview.open_devtools();
+            Ok(true)
+        }
+    } else {
+        Err(format!("Browser pane '{}' not found", pane_id))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitStatusEntry {
+    path: String,
+    status: String,
+    staged: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitLogEntry {
+    hash: String,
+    short_hash: String,
+    author: String,
+    date: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitInfo {
+    branch: String,
+    entries: Vec<GitStatusEntry>,
+    ahead: u32,
+    behind: u32,
+    is_repo: bool,
+}
+
+#[tauri::command]
+async fn get_git_status(cwd: String) -> Result<GitInfo, String> {
+    let branch_out = run_silent_in("git", &["branch", "--show-current"], &cwd).await.unwrap_or_default();
+    let branch = branch_out.trim().to_string();
+    if branch.is_empty() {
+        return Ok(GitInfo { branch: String::new(), entries: vec![], ahead: 0, behind: 0, is_repo: false });
+    }
+
+    let status_out = run_silent_in("git", &["status", "--porcelain=v1"], &cwd).await.unwrap_or_default();
+    let entries: Vec<GitStatusEntry> = status_out.lines().filter(|l| l.len() >= 3).map(|line| {
+        let xy = &line[..2];
+        let path = line[3..].trim().to_string();
+        let staged = xy.as_bytes()[0] != b' ' && xy.as_bytes()[0] != b'?';
+        let status = match xy.as_bytes()[0] {
+            b'M' => "modified", b'A' => "added", b'D' => "deleted", b'R' => "renamed", b'C' => "copied",
+            _ => match xy.as_bytes()[1] { b'M' => "modified", b'D' => "deleted", b'?' => "untracked", _ => "unknown" },
+        }.to_string();
+        GitStatusEntry { path, status, staged }
+    }).collect();
+
+    let ab_out = run_silent_in("git", &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], &cwd).await.unwrap_or_default();
+    let parts: Vec<u32> = ab_out.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+    let ahead = parts.first().copied().unwrap_or(0);
+    let behind = parts.get(1).copied().unwrap_or(0);
+
+    Ok(GitInfo { branch, entries, ahead, behind, is_repo: true })
+}
+
+#[tauri::command]
+async fn get_git_log(cwd: String, count: Option<u32>) -> Result<Vec<GitLogEntry>, String> {
+    let n = count.unwrap_or(30).to_string();
+    let out = run_silent_in("git", &["log", &format!("-{}", n), "--pretty=format:%H|%h|%an|%ad|%s", "--date=relative"], &cwd).await.unwrap_or_default();
+    let entries = out.lines().filter_map(|line| {
+        let parts: Vec<&str> = line.splitn(5, '|').collect();
+        if parts.len() == 5 {
+            Some(GitLogEntry { hash: parts[0].into(), short_hash: parts[1].into(), author: parts[2].into(), date: parts[3].into(), message: parts[4].into() })
+        } else { None }
+    }).collect();
+    Ok(entries)
+}
+
+#[tauri::command]
+async fn get_git_diff(cwd: String, file_path: Option<String>, staged: Option<bool>) -> Result<String, String> {
+    let mut args = vec!["diff"];
+    if staged.unwrap_or(false) { args.push("--cached"); }
+    let fp_owned;
+    if let Some(ref fp) = file_path { fp_owned = fp.clone(); args.push(&fp_owned); }
+    run_silent_in("git", &args, &cwd).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_stage_file(cwd: String, file_path: String) -> Result<(), String> {
+    run_silent_in("git", &["add", &file_path], &cwd).await.map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_unstage_file(cwd: String, file_path: String) -> Result<(), String> {
+    run_silent_in("git", &["restore", "--staged", &file_path], &cwd).await.map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_commit(cwd: String, message: String) -> Result<String, String> {
+    run_silent_in("git", &["commit", "-m", &message], &cwd).await.map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SSHConnection {
+    id: String,
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+    auth_method: String, // "password" | "key"
+    key_path: Option<String>,
+}
+
+#[tauri::command]
+async fn test_ssh_connection(host: String, port: u16, username: String) -> Result<bool, String> {
+    let addr = format!("{}@{}", username, host);
+    let output = tokio::process::Command::new("ssh")
+        .args(&["-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", "-p", &port.to_string(), &addr, "echo", "ok"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("SSH not available: {}", e))?;
+    Ok(output.status.success())
+}
+
+#[tauri::command]
+fn get_ssh_bootstrap_command(host: String, port: u16, username: String, key_path: Option<String>) -> Result<String, String> {
+    let mut cmd = format!("ssh -o StrictHostKeyChecking=no -p {} {}@{}", port, username, host);
+    if let Some(key) = key_path {
+        cmd = format!("ssh -o StrictHostKeyChecking=no -i \"{}\" -p {} {}@{}", key, port, username, host);
+    }
+    Ok(cmd)
+}
+
+async fn run_silent_in(cmd: &str, args: &[&str], cwd: &str) -> Result<String, String> {
+    let output = tokio::process::Command::new(cmd)
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FileContentResult {
+    content: String,
+    path: String,
+    size: u64,
+    is_binary: bool,
+}
+
+#[tauri::command]
+async fn read_file_content(path: String) -> Result<FileContentResult, String> {
+    let file_path = PathBuf::from(&path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+    let metadata = tokio::fs::metadata(&file_path).await.map_err(|e| e.to_string())?;
+    if metadata.len() > 5_000_000 {
+        return Err("File too large (>5MB). Open in external editor.".to_string());
+    }
+    let bytes = tokio::fs::read(&file_path).await.map_err(|e| e.to_string())?;
+    // Check if binary (contains null bytes in first 8KB)
+    let is_binary = bytes.iter().take(8192).any(|&b| b == 0);
+    if is_binary {
+        return Ok(FileContentResult { content: String::new(), path, size: metadata.len(), is_binary: true });
+    }
+    let content = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(FileContentResult { content, path, size: metadata.len(), is_binary: false })
+}
+
+#[tauri::command]
+async fn write_file_content(path: String, content: String) -> Result<(), String> {
+    tokio::fs::write(&path, content.as_bytes()).await.map_err(|e| format!("Failed to write file: {}", e))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct EnvVarEntry {
+    key: String,
+    value: String,
+    comment: Option<String>,
+}
+
+#[tauri::command]
+async fn read_env_file(path: String) -> Result<Vec<EnvVarEntry>, String> {
+    let content = tokio::fs::read_to_string(&path).await.map_err(|e| format!("Failed to read .env file: {}", e))?;
+    let mut entries: Vec<EnvVarEntry> = Vec::new();
+    let mut last_comment: Option<String> = None;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            last_comment = Some(trimmed.trim_start_matches('#').trim().to_string());
+            continue;
+        }
+        if trimmed.is_empty() { last_comment = None; continue; }
+        if let Some(eq_pos) = trimmed.find('=') {
+            let key = trimmed[..eq_pos].trim().to_string();
+            let raw_value = trimmed[eq_pos + 1..].trim();
+            let value = if (raw_value.starts_with('"') && raw_value.ends_with('"'))
+                || (raw_value.starts_with('\'') && raw_value.ends_with('\'')) {
+                raw_value[1..raw_value.len() - 1].to_string()
+            } else {
+                raw_value.to_string()
+            };
+            entries.push(EnvVarEntry { key, value, comment: last_comment.take() });
+        }
+        last_comment = None;
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+async fn write_env_file(path: String, vars: Vec<EnvVarEntry>) -> Result<(), String> {
+    let mut lines: Vec<String> = Vec::new();
+    for var in &vars {
+        if let Some(comment) = &var.comment {
+            if !comment.is_empty() { lines.push(format!("# {}", comment)); }
+        }
+        let value = if var.value.contains(' ') || var.value.is_empty() {
+            format!("\"{}\"", var.value)
+        } else {
+            var.value.clone()
+        };
+        lines.push(format!("{}={}", var.key, value));
+    }
+    tokio::fs::write(&path, lines.join("\n") + "\n").await.map_err(|e| format!("Failed to write .env file: {}", e))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct LanguageStat {
+    language: String,
+    extension: String,
+    file_count: usize,
+    line_count: usize,
+    color: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct FileStat {
+    path: String,
+    name: String,
+    size: u64,
+    line_count: usize,
+    modified: u64,
+    language: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CodebaseStats {
+    root: String,
+    total_files: usize,
+    total_lines: usize,
+    total_size: u64,
+    by_language: Vec<LanguageStat>,
+    largest_files: Vec<FileStat>,
+    recently_modified: Vec<FileStat>,
+}
+
+fn detect_language(ext: &str) -> (&'static str, &'static str) {
+    match ext {
+        "rs" => ("Rust", "#f74c00"),
+        "ts" | "tsx" => ("TypeScript", "#3178c6"),
+        "js" | "jsx" | "mjs" | "cjs" => ("JavaScript", "#f7df1e"),
+        "py" => ("Python", "#3572a5"),
+        "go" => ("Go", "#00add8"),
+        "java" => ("Java", "#b07219"),
+        "kt" => ("Kotlin", "#a97bff"),
+        "cpp" | "cc" | "cxx" => ("C++", "#f34b7d"),
+        "c" | "h" => ("C", "#555555"),
+        "cs" => ("C#", "#178600"),
+        "rb" => ("Ruby", "#701516"),
+        "php" => ("PHP", "#4f5d95"),
+        "swift" => ("Swift", "#f05138"),
+        "html" | "htm" => ("HTML", "#e34c26"),
+        "css" | "scss" | "sass" | "less" => ("CSS", "#563d7c"),
+        "json" => ("JSON", "#292929"),
+        "yaml" | "yml" => ("YAML", "#cb171e"),
+        "toml" => ("TOML", "#9c4221"),
+        "md" | "mdx" => ("Markdown", "#083fa1"),
+        "sh" | "bash" | "zsh" | "fish" => ("Shell", "#89e051"),
+        "sql" => ("SQL", "#e38c00"),
+        "xml" => ("XML", "#0060ac"),
+        "vue" => ("Vue", "#41b883"),
+        "svelte" => ("Svelte", "#ff3e00"),
+        _ => ("Other", "#8e8e8e"),
+    }
+}
+
+#[async_recursion::async_recursion]
+async fn walk_codebase(
+    dir: &std::path::Path,
+    depth: u32,
+    skip_dirs: &[&str],
+    stats: &mut std::collections::HashMap<String, LanguageStat>,
+    all_files: &mut Vec<FileStat>,
+) {
+    if depth == 0 { return; }
+    let mut read_dir = match tokio::fs::read_dir(dir).await {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        if name.starts_with('.') || skip_dirs.contains(&name.as_str()) { continue; }
+        if path.is_dir() {
+            walk_codebase(&path, depth - 1, skip_dirs, stats, all_files).await;
+        } else if path.is_file() {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if ext.is_empty() { continue; }
+            let meta = match tokio::fs::metadata(&path).await {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let size = meta.len();
+            if size > 10 * 1024 * 1024 { continue; }
+            let modified = meta.modified().ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs()).unwrap_or(0);
+            let content = match tokio::fs::read_to_string(&path).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let line_count = content.lines().count();
+            let (lang_name, lang_color) = detect_language(&ext);
+            let entry_stat = stats.entry(ext.clone()).or_insert_with(|| LanguageStat {
+                language: lang_name.to_string(),
+                extension: ext.clone(),
+                file_count: 0,
+                line_count: 0,
+                color: lang_color.to_string(),
+            });
+            entry_stat.file_count += 1;
+            entry_stat.line_count += line_count;
+            all_files.push(FileStat {
+                path: path.to_string_lossy().to_string(),
+                name,
+                size,
+                line_count,
+                modified,
+                language: lang_name.to_string(),
+            });
+        }
+    }
+}
+
+#[tauri::command]
+async fn index_codebase(root: String, max_depth: Option<u32>) -> Result<CodebaseStats, String> {
+    let root_path = PathBuf::from(&root);
+    if !root_path.is_dir() {
+        return Err("Not a directory".to_string());
+    }
+    let depth = max_depth.unwrap_or(6);
+    let skip_dirs = ["node_modules", "target", ".git", "dist", "build", "out", ".next", "__pycache__", "vendor", ".cargo", "venv", ".venv"];
+    let mut stats: std::collections::HashMap<String, LanguageStat> = std::collections::HashMap::new();
+    let mut all_files: Vec<FileStat> = Vec::new();
+    walk_codebase(&root_path, depth, &skip_dirs, &mut stats, &mut all_files).await;
+    let total_files = all_files.len();
+    let total_lines: usize = all_files.iter().map(|f| f.line_count).sum();
+    let total_size: u64 = all_files.iter().map(|f| f.size).sum();
+    let mut by_language: Vec<LanguageStat> = stats.into_values().collect();
+    by_language.sort_by(|a, b| b.line_count.cmp(&a.line_count));
+    let mut largest = all_files.clone();
+    largest.sort_by(|a, b| b.line_count.cmp(&a.line_count));
+    largest.truncate(10);
+    let mut recent = all_files;
+    recent.sort_by(|a, b| b.modified.cmp(&a.modified));
+    recent.truncate(10);
+    Ok(CodebaseStats { root, total_files, total_lines, total_size, by_language, largest_files: largest, recently_modified: recent })
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProcessInfo {
+    pid: u32,
+    name: String,
+    cpu_usage: f32,
+    memory_mb: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SystemStats {
+    cpu_usage: f32,
+    cpu_count: usize,
+    memory_used_mb: f64,
+    memory_total_mb: f64,
+    memory_percent: f32,
+    swap_used_mb: f64,
+    swap_total_mb: f64,
+    disk_used_gb: f64,
+    disk_total_gb: f64,
+    disk_percent: f32,
+    uptime_secs: u64,
+    top_processes: Vec<ProcessInfo>,
+}
+
+#[tauri::command]
+async fn get_system_stats() -> Result<SystemStats, String> {
+    use sysinfo::{Disks, System};
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    sys.refresh_all();
+
+    let cpu_usage = sys.global_cpu_usage();
+    let cpu_count = sys.cpus().len();
+    let memory_used_mb = sys.used_memory() as f64 / 1024.0 / 1024.0;
+    let memory_total_mb = sys.total_memory() as f64 / 1024.0 / 1024.0;
+    let memory_percent = if memory_total_mb > 0.0 { (memory_used_mb / memory_total_mb * 100.0) as f32 } else { 0.0 };
+    let swap_used_mb = sys.used_swap() as f64 / 1024.0 / 1024.0;
+    let swap_total_mb = sys.total_swap() as f64 / 1024.0 / 1024.0;
+
+    let disks = Disks::new_with_refreshed_list();
+    let (disk_used_gb, disk_total_gb) = disks.iter().fold((0.0f64, 0.0f64), |(used, total), d| {
+        let t = d.total_space() as f64 / 1024.0 / 1024.0 / 1024.0;
+        let u = t - d.available_space() as f64 / 1024.0 / 1024.0 / 1024.0;
+        (used + u, total + t)
+    });
+    let disk_percent = if disk_total_gb > 0.0 { (disk_used_gb / disk_total_gb * 100.0) as f32 } else { 0.0 };
+
+    let uptime_secs = System::uptime();
+
+    let mut procs: Vec<ProcessInfo> = sys.processes().values().map(|p| ProcessInfo {
+        pid: p.pid().as_u32(),
+        name: p.name().to_string_lossy().to_string(),
+        cpu_usage: p.cpu_usage(),
+        memory_mb: p.memory() as f64 / 1024.0 / 1024.0,
+    }).collect();
+    procs.sort_by(|a, b| b.cpu_usage.partial_cmp(&a.cpu_usage).unwrap_or(std::cmp::Ordering::Equal));
+    procs.truncate(15);
+
+    Ok(SystemStats { cpu_usage, cpu_count, memory_used_mb, memory_total_mb, memory_percent, swap_used_mb, swap_total_mb, disk_used_gb, disk_total_gb, disk_percent, uptime_secs, top_processes: procs })
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PortEntry {
+    port: u16,
+    protocol: String,
+    state: String,
+    pid: Option<u32>,
+    process_name: Option<String>,
+    local_address: String,
+}
+
+#[tauri::command]
+async fn scan_active_ports() -> Result<Vec<PortEntry>, String> {
+    #[cfg(target_os = "windows")]
+    let output = tokio::process::Command::new("netstat")
+        .args(["-ano"])
+        .output().await.map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    let output = tokio::process::Command::new("sh")
+        .args(["-c", "ss -tlnup 2>/dev/null || netstat -tlnup 2>/dev/null"])
+        .output().await.map_err(|e| e.to_string())?;
+
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    let mut entries: Vec<PortEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<u16> = std::collections::HashSet::new();
+
+    use sysinfo::System;
+    let mut sys = System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        #[cfg(target_os = "windows")]
+        if cols.len() >= 4 {
+            let proto = cols[0].to_uppercase();
+            if proto != "TCP" && proto != "UDP" { continue; }
+            let local = cols[1];
+            let state = if cols.len() >= 4 { cols[3].to_string() } else { "UNKNOWN".to_string() };
+            let pid_str = if proto == "TCP" && cols.len() >= 5 { cols[4] } else if cols.len() >= 4 { cols[3] } else { "0" };
+            if let Some(port_str) = local.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    if seen.insert(port) {
+                        let pid = pid_str.parse::<u32>().ok();
+                        let process_name = pid.and_then(|p| {
+                            sys.processes().get(&sysinfo::Pid::from_u32(p)).map(|pr| pr.name().to_string_lossy().to_string())
+                        });
+                        entries.push(PortEntry { port, protocol: proto, state, pid, process_name, local_address: local.to_string() });
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        if cols.len() >= 4 {
+            let local = cols.get(3).or(cols.get(2)).unwrap_or(&"");
+            if let Some(port_str) = local.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    if seen.insert(port) {
+                        entries.push(PortEntry { port, protocol: "TCP".to_string(), state: "LISTEN".to_string(), pid: None, process_name: None, local_address: local.to_string() });
+                    }
+                }
+            }
+        }
+    }
+    entries.sort_by_key(|e| e.port);
+    entries.truncate(100);
+    Ok(entries)
+}
+
+#[tauri::command]
+async fn kill_process_by_pid(pid: u32) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    let out = tokio::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .output().await.map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    let out = tokio::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output().await.map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(format!("Process {} killed", pid))
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_directory_tree(root: String, max_depth: Option<u32>) -> Result<Vec<TreeEntry>, String> {
+    let root_path = PathBuf::from(&root);
+    if !root_path.is_dir() {
+        return Err("Not a directory".to_string());
+    }
+    let depth = max_depth.unwrap_or(3);
+    let mut entries = Vec::new();
+    collect_tree(&root_path, &root_path, depth, &mut entries).await;
+    Ok(entries)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TreeEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    depth: u32,
+    size: u64,
+    children_count: u32,
+}
+
+#[async_recursion::async_recursion]
+async fn collect_tree(base: &Path, current: &Path, remaining_depth: u32, entries: &mut Vec<TreeEntry>) {
+    if remaining_depth == 0 { return; }
+    let Ok(mut read_dir) = tokio::fs::read_dir(current).await else { return };
+    let mut local: Vec<(String, PathBuf, bool, u64)> = Vec::new();
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Skip hidden, node_modules, .git, target, etc.
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "__pycache__" || name == ".next" || name == "dist" || name == "build" { continue; }
+        let is_dir = entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false);
+        let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+        local.push((name, entry.path(), is_dir, size));
+    }
+    // Sort: dirs first, then alpha
+    local.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    if local.len() > 200 { local.truncate(200); }
+
+    for (name, full_path, is_dir, size) in local {
+        let rel = full_path.strip_prefix(base).unwrap_or(&full_path).to_string_lossy().replace('\\', "/");
+        let children_count = if is_dir {
+            tokio::fs::read_dir(&full_path).await.map(|_| 1u32).unwrap_or(0)
+        } else { 0 };
+        let depth = rel.matches('/').count() as u32;
+        entries.push(TreeEntry { name, path: rel, is_dir, depth, size, children_count });
+        if is_dir && remaining_depth > 1 {
+            collect_tree(base, &full_path, remaining_depth - 1, entries).await;
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AIChatRequest {
+    provider: String,
+    api_key: String,
+    model: String,
+    endpoint: Option<String>,
+    messages: Vec<AIChatMsg>,
+    max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct AIChatMsg {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AIChatResponse {
+    content: String,
+    model: String,
+    provider: String,
+    tokens_used: u32,
+}
+
+#[tauri::command]
+async fn ai_chat_completion(request: AIChatRequest) -> Result<AIChatResponse, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    match request.provider.as_str() {
+        "openai" => {
+            let body = serde_json::json!({
+                "model": request.model,
+                "messages": request.messages.iter().map(|m| serde_json::json!({"role": m.role, "content": m.content})).collect::<Vec<_>>(),
+                "max_tokens": request.max_tokens.unwrap_or(1024),
+                "temperature": 0.7,
+            });
+            let resp = client.post("https://api.openai.com/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", request.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send().await.map_err(|e| format!("OpenAI request failed: {}", e))?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| format!("OpenAI parse error: {}", e))?;
+            let content = json["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+            let tokens = json["usage"]["total_tokens"].as_u64().unwrap_or(0) as u32;
+            Ok(AIChatResponse { content, model: request.model, provider: "openai".into(), tokens_used: tokens })
+        }
+        "anthropic" => {
+            let system_msg = request.messages.iter().find(|m| m.role == "system").map(|m| m.content.clone());
+            let msgs: Vec<_> = request.messages.iter().filter(|m| m.role != "system")
+                .map(|m| serde_json::json!({"role": m.role, "content": m.content})).collect();
+            let mut body = serde_json::json!({
+                "model": request.model,
+                "messages": msgs,
+                "max_tokens": request.max_tokens.unwrap_or(1024),
+            });
+            if let Some(sys) = system_msg {
+                body["system"] = serde_json::Value::String(sys);
+            }
+            let resp = client.post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", &request.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send().await.map_err(|e| format!("Anthropic request failed: {}", e))?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| format!("Anthropic parse error: {}", e))?;
+            let content = json["content"][0]["text"].as_str().unwrap_or("").to_string();
+            let tokens = json["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32
+                + json["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
+            Ok(AIChatResponse { content, model: request.model, provider: "anthropic".into(), tokens_used: tokens })
+        }
+        "google" => {
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                request.model, request.api_key
+            );
+            let parts: Vec<_> = request.messages.iter()
+                .map(|m| serde_json::json!({"role": if m.role == "assistant" { "model" } else { "user" }, "parts": [{"text": m.content}]}))
+                .collect();
+            let body = serde_json::json!({ "contents": parts });
+            let resp = client.post(&url)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send().await.map_err(|e| format!("Google AI request failed: {}", e))?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| format!("Google AI parse error: {}", e))?;
+            let content = json["candidates"][0]["content"]["parts"][0]["text"].as_str().unwrap_or("").to_string();
+            let tokens = json["usageMetadata"]["totalTokenCount"].as_u64().unwrap_or(0) as u32;
+            Ok(AIChatResponse { content, model: request.model, provider: "google".into(), tokens_used: tokens })
+        }
+        "ollama" => {
+            let endpoint = request.endpoint.unwrap_or_else(|| "http://localhost:11434".into());
+            let msgs: Vec<_> = request.messages.iter()
+                .map(|m| serde_json::json!({"role": m.role, "content": m.content})).collect();
+            let body = serde_json::json!({
+                "model": request.model,
+                "messages": msgs,
+                "stream": false,
+            });
+            let resp = client.post(format!("{}/api/chat", endpoint))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send().await.map_err(|e| format!("Ollama request failed: {}", e))?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| format!("Ollama parse error: {}", e))?;
+            let content = json["message"]["content"].as_str().unwrap_or("").to_string();
+            let tokens = json["eval_count"].as_u64().unwrap_or(0) as u32;
+            Ok(AIChatResponse { content, model: request.model, provider: "ollama".into(), tokens_used: tokens })
+        }
+        _ => Err(format!("Unknown AI provider: {}", request.provider)),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    std::panic::set_hook(Box::new(|info| {
+        let message = format!("SloerSpace encountered a fatal error:\n\n{}", info);
+        eprintln!("{}", message);
+        if let Some(crash_dir) = std::env::temp_dir().parent().map(|p| p.to_path_buf()).or_else(|| Some(std::env::temp_dir())) {
+            let crash_log = crash_dir.join("sloerspace-crash.log");
+            let _ = std::fs::write(&crash_log, &message);
+        }
+    }));
+
+    let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_default_workdir,
             get_terminal_capabilities,
@@ -2650,10 +3676,46 @@ pub fn run() {
             get_app_version,
             check_app_update,
             install_app_update,
+            handle_dropped_files,
+            browser_create_pane,
+            browser_close_pane,
+            browser_navigate_pane,
+            browser_resize_pane,
+            browser_list_panes,
+            browser_toggle_devtools,
+            browser_set_visible,
+            ai_chat_completion,
+            read_file_content,
+            write_file_content,
+            get_directory_tree,
+            get_git_status,
+            get_git_log,
+            get_git_diff,
+            git_stage_file,
+            git_unstage_file,
+            git_commit,
+            test_ssh_connection,
+            get_ssh_bootstrap_command,
+            read_env_file,
+            write_env_file,
+            index_codebase,
+            get_system_stats,
+            scan_active_ports,
+            kill_process_by_pid,
         ])
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .plugin(tauri_plugin_notification::init())
+        .build(tauri::generate_context!());
+
+    match app {
+        Ok(application) => {
+            application.run(|_app_handle, _event| {});
+        }
+        Err(error) => {
+            eprintln!("Failed to start SloerSpace: {}", error);
+            std::process::exit(1);
+        }
+    }
 }

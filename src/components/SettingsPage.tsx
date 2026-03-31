@@ -2,18 +2,24 @@
 
 import Image from 'next/image'
 import { checkAppUpdate, getAppVersion, installAppUpdate, type AppUpdateInfo } from '@/lib/desktop'
-import { useStore, ThemeId, AgentCli, SettingsTab, CustomThemePreset } from '@/store/useStore'
+import { useStore, ThemeId, AgentCli, SettingsTab, CustomThemePreset, AIProvider, WhisperModel, WhisperLanguage } from '@/store/useStore'
 import { useToast } from '@/components/Toast'
-import { Palette, Keyboard, Bot, User, Key, ExternalLink, LogOut, Download, FileText, Check, Sparkles, ShieldCheck, Command, Upload, Database, Trash2, AlertTriangle, ChevronRight, Mail } from 'lucide-react'
+import { Palette, Keyboard, Bot, User, Key, ExternalLink, LogOut, Download, FileText, Check, Sparkles, ShieldCheck, Command, Upload, Database, Trash2, AlertTriangle, ChevronRight, Mail, Mic, Terminal, MonitorSmartphone, Radio, RefreshCw, Braces, Eye, EyeOff, Bell, HelpCircle, Zap, Globe, Layers, MessageSquare, Server, Activity, ChevronDown as ChevronDownIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
-  { id: 'appearance', label: 'Appearance', icon: Palette },
-  { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
-  { id: 'ai-agents', label: 'AI Agents', icon: Bot },
-  { id: 'account', label: 'Account', icon: User },
-  { id: 'api-keys', label: 'API Keys', icon: Key },
-  { id: 'data' as SettingsTab, label: 'Data', icon: Database },
+const SETTINGS_TABS: { id: SettingsTab; label: string; desc: string; icon: React.ElementType }[] = [
+  { id: 'account', label: 'Account', desc: 'Profile and billing', icon: User },
+  { id: 'appearance', label: 'Appearance', desc: 'Theme and display', icon: Palette },
+  { id: 'shortcuts', label: 'Shortcuts', desc: 'Keyboard bindings', icon: Keyboard },
+  { id: 'ai-agents', label: 'AI Agents', desc: 'Default coding agent', icon: Bot },
+  { id: 'ai-settings', label: 'AI Provider', desc: 'API keys & models', icon: Braces },
+  { id: 'siulk-voice', label: 'SiulkVoice', desc: 'Voice-to-text dictation', icon: Mic },
+  { id: 'notifications', label: 'Notifications', desc: 'Sounds and alerts', icon: Bell },
+  { id: 'cli', label: 'CLI', desc: 'Install sloerspace command', icon: MonitorSmartphone },
+  { id: 'terminal', label: 'Terminal', desc: 'Default shell', icon: Terminal },
+  { id: 'api-keys', label: 'API Keys', desc: 'Create and manage keys', icon: Key },
+  { id: 'data', label: 'Data', desc: 'Export, import, reset', icon: Database },
+  { id: 'help', label: 'Help', desc: 'Features & shortcuts', icon: HelpCircle },
 ]
 
 type ThemeDescriptor = {
@@ -211,6 +217,25 @@ const THEME_LIBRARY: ThemeDescriptor[] = [
     description: 'Absolute black contrast profile with punchy neon telemetry for deep displays.',
   },
   {
+    id: 'dark-contrast-puro',
+    name: 'Dark Contrast Puro',
+    mode: 'dark',
+    colors: ['#ff5c5c', '#39ffb5', '#7aa2ff'],
+    surface0: '#000000',
+    surface1: '#050505',
+    surface2: '#0b0b0d',
+    surface3: '#111216',
+    textPrimary: '#ffffff',
+    textSecondary: '#d9dde7',
+    textMuted: '#8d95a6',
+    accent: '#7aa2ff',
+    secondary: '#dce6ff',
+    border: '#252932',
+    terminalBg: '#000000',
+    terminalText: '#ffffff',
+    description: 'Pure black operator canvas with razor-sharp text, crisp borders and cold-blue highlights.',
+  },
+  {
     id: 'neon-tech',
     name: 'Neon Tech',
     mode: 'dark',
@@ -339,6 +364,8 @@ const AGENTS_LIST: { id: AgentCli; name: string; desc: string; cmd: string }[] =
   { id: 'gemini', name: 'Gemini', desc: 'Google Gemini CLI', cmd: 'gemini' },
   { id: 'opencode', name: 'OpenCode', desc: 'OpenCode TUI agent', cmd: 'opencode' },
   { id: 'cursor', name: 'Cursor', desc: 'Cursor Agent CLI', cmd: 'agent' },
+  { id: 'droid', name: 'Droid', desc: 'Droid coding agent', cmd: 'droid' },
+  { id: 'copilot', name: 'Copilot', desc: 'GitHub Copilot CLI', cmd: 'copilot' },
 ]
 
 const SHORTCUTS = [
@@ -572,7 +599,7 @@ function normalizeImportedTheme(raw: unknown): ThemePreviewDescriptor | null {
 }
 
 function ThemePreviewCanvas({ theme, compact = false }: { theme: ThemePreviewDescriptor; compact?: boolean }) {
-  const traffic = compact ? 4 : 5
+  const traffic = compact ? 3 : 4
   const accentSoft = withAlpha(theme.accent, 0.1)
   const accentBorder = withAlpha(theme.accent, 0.24)
   const accentGlow = withAlpha(theme.accent, compact ? 0.16 : 0.22)
@@ -622,42 +649,82 @@ function ThemePreviewCanvas({ theme, compact = false }: { theme: ThemePreviewDes
         </span>
       </div>
 
-      <div className={`grid gap-4 p-4 ${compact ? 'md:grid-cols-[0.78fr_1.22fr]' : 'xl:grid-cols-[220px_1fr]'}`}>
-        <div
-          className="premium-card-shell rounded-[20px] border p-4"
-          style={{
-            background: `linear-gradient(180deg, ${theme.surface1}, ${theme.surface2})`,
-            borderColor: theme.border,
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <div
-              className="h-9 w-9 rounded-[14px]"
-              style={{
-                background: accentSoft,
-                border: `1px solid ${accentBorder}`,
-                boxShadow: `0 14px 34px ${withAlpha(theme.accent, 0.14)}`,
-              }}
-            />
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: theme.textMuted }}>Workspace</div>
-              <div className="text-[12px] font-semibold" style={{ color: theme.textPrimary }}>Mission control</div>
+      <div className={`grid gap-4 p-4 ${compact ? 'lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]' : 'xl:grid-cols-[minmax(0,0.94fr)_minmax(0,1.06fr)]'}`}>
+        <div className="space-y-4">
+          <div
+            className="premium-card-shell rounded-[20px] border p-4"
+            style={{
+              background: `linear-gradient(180deg, ${theme.surface1}, ${theme.surface2})`,
+              borderColor: theme.border,
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className="h-10 w-10 rounded-[14px]"
+                style={{
+                  background: accentSoft,
+                  border: `1px solid ${accentBorder}`,
+                  boxShadow: `0 14px 34px ${withAlpha(theme.accent, 0.14)}`,
+                }}
+              />
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: theme.textMuted }}>Workspace</div>
+                <div className="text-[13px] font-semibold" style={{ color: theme.textPrimary }}>Mission control</div>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-2.5">
+              {['Overview', 'Threads', 'Agents', 'Console'].slice(0, traffic).map((item, index) => (
+                <div
+                  key={item}
+                  className="flex items-center gap-2 rounded-[14px] px-3 py-2.5"
+                  style={{
+                    background: index === 0 ? accentSoft : theme.surface0,
+                    border: `1px solid ${index === 0 ? accentBorder : theme.border}`,
+                  }}
+                >
+                  <span className="h-2 w-2 rounded-full" style={{ background: index === 0 ? theme.accent : theme.secondary }} />
+                  <span className="text-[10px] font-medium" style={{ color: index === 0 ? theme.textPrimary : theme.textSecondary }}>{item}</span>
+                </div>
+              ))}
             </div>
           </div>
-          <div className="mt-4 space-y-2">
-            {['Overview', 'Threads', 'Agents', 'Console'].slice(0, traffic).map((item, index) => (
-              <div
-                key={item}
-                className="flex items-center gap-2 rounded-[14px] px-3 py-2"
-                style={{
-                  background: index === 0 ? accentSoft : theme.surface0,
-                  border: `1px solid ${index === 0 ? accentBorder : theme.border}`,
-                }}
-              >
-                <span className="h-2 w-2 rounded-full" style={{ background: index === 0 ? theme.accent : theme.secondary }} />
-                <span className="text-[10px] font-medium" style={{ color: index === 0 ? theme.textPrimary : theme.textSecondary }}>{item}</span>
+
+          <div className={`grid gap-3 ${compact ? '' : 'sm:grid-cols-2'}`}>
+            <div
+              className="premium-card-shell rounded-[20px] border p-4"
+              style={{
+                background: `linear-gradient(180deg, ${theme.surface1}, ${theme.surface2})`,
+                borderColor: theme.border,
+              }}
+            >
+              <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: theme.textMuted }}>Surface stack</div>
+              <div className="mt-3 grid grid-cols-4 gap-2">
+                {[theme.surface0, theme.surface1, theme.surface2, theme.surface3].map((color) => (
+                  <div key={color} className="h-10 rounded-[12px] border" style={{ background: color, borderColor: theme.border }} />
+                ))}
               </div>
-            ))}
+            </div>
+
+            <div
+              className="premium-card-shell rounded-[20px] border p-4"
+              style={{
+                background: `linear-gradient(180deg, ${theme.surface1}, ${theme.surface2})`,
+                borderColor: theme.border,
+              }}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: theme.textMuted }}>Quality verdict</div>
+                  <div className="mt-1 text-[14px] font-semibold" style={{ color: theme.textPrimary }}>Stable layered profile</div>
+                </div>
+                <span className="rounded-full px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ background: secondarySoft, color: theme.secondary, border: `1px solid ${secondaryBorder}` }}>
+                  {compact ? 'Compact' : 'Expanded'}
+                </span>
+              </div>
+              <div className="mt-3 text-[10px] leading-5" style={{ color: theme.textSecondary }}>
+                Balanced spacing, calmer surface hierarchy and wider signal cards for clearer readability.
+              </div>
+            </div>
           </div>
         </div>
 
@@ -673,7 +740,7 @@ function ThemePreviewCanvas({ theme, compact = false }: { theme: ThemePreviewDes
               <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: theme.textMuted }}>Editor</div>
               <span className="rounded-full px-2 py-1 text-[9px] font-medium" style={{ background: secondarySoft, color: theme.secondary, border: `1px solid ${secondaryBorder}` }}>Live tokens</span>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               <div className="flex gap-2">
                 <div className="h-2 rounded-full" style={{ width: '16%', background: theme.colors[0] }} />
                 <div className="h-2 rounded-full" style={{ width: '24%', background: muted66 }} />
@@ -696,7 +763,7 @@ function ThemePreviewCanvas({ theme, compact = false }: { theme: ThemePreviewDes
             </div>
           </div>
 
-          <div className={`grid gap-4 ${compact ? 'md:grid-cols-2' : 'md:grid-cols-[1.1fr_0.9fr]'}`}>
+          <div className={`grid gap-3 ${compact ? 'lg:grid-cols-2' : 'lg:grid-cols-[minmax(0,0.96fr)_minmax(0,1.04fr)]'}`}>
             <div
               className="premium-card-shell rounded-[20px] border p-4"
               style={{
@@ -704,7 +771,7 @@ function ThemePreviewCanvas({ theme, compact = false }: { theme: ThemePreviewDes
                 borderColor: theme.border,
               }}
             >
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-3 flex items-center justify-between gap-3">
                 <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: theme.textMuted }}>Terminal</div>
                 <span className="text-[10px] font-mono" style={{ color: theme.textSecondary }}>PS &gt; ship</span>
               </div>
@@ -715,18 +782,15 @@ function ThemePreviewCanvas({ theme, compact = false }: { theme: ThemePreviewDes
               </div>
             </div>
 
-            <div
-              className="premium-card-shell rounded-[20px] border p-4"
-              style={{
-                background: `linear-gradient(180deg, ${theme.surface1}, ${theme.surface2})`,
-                borderColor: theme.border,
-              }}
-            >
-              <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: theme.textMuted }}>Signals</div>
-              <div className="mt-3 grid gap-2">
-                <div className="rounded-[14px] px-3 py-2" style={{ background: accentSoft, color: theme.accent, border: `1px solid ${accentBorder}` }}>Accent channel armed</div>
-                <div className="rounded-[14px] px-3 py-2" style={{ background: secondarySoft, color: theme.secondary, border: `1px solid ${secondaryBorder}` }}>Secondary lane synced</div>
-                <div className="rounded-[14px] px-3 py-2" style={{ background: theme.surface0, color: theme.textSecondary, border: `1px solid ${theme.border}` }}>Panel contrast stabilized</div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-[16px] px-3 py-3" style={{ background: accentSoft, color: theme.accent, border: `1px solid ${accentBorder}` }}>
+                Accent channel armed
+              </div>
+              <div className="rounded-[16px] px-3 py-3" style={{ background: secondarySoft, color: theme.secondary, border: `1px solid ${secondaryBorder}` }}>
+                Secondary lane synced
+              </div>
+              <div className="rounded-[16px] px-3 py-3 sm:col-span-2" style={{ background: theme.surface1, color: theme.textSecondary, border: `1px solid ${theme.border}` }}>
+                Panel contrast stabilized across wider cards and calmer section spacing.
               </div>
             </div>
           </div>
@@ -834,6 +898,30 @@ function ThemeCard({
   )
 }
 
+function AIKeyInput({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (val: string) => void; placeholder: string }) {
+  const [visible, setVisible] = useState(false)
+  return (
+    <div>
+      <label className="text-[10px] font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>{label}</label>
+      <div className="flex items-center gap-2">
+        <input
+          type={visible ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 px-3 py-2 rounded-lg text-[12px] bg-transparent outline-none font-mono"
+          style={{ border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+          spellCheck={false}
+        />
+        <button onClick={() => setVisible(!visible)} className="p-2 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" style={{ color: 'var(--text-muted)' }}>
+          {visible ? <EyeOff size={14} /> : <Eye size={14} />}
+        </button>
+      </div>
+      {value && <div className="mt-1 text-[9px]" style={{ color: 'var(--success)' }}>● Key configured</div>}
+    </div>
+  )
+}
+
 export function SettingsPage() {
   const store = useStore()
   const { addToast } = useToast()
@@ -849,6 +937,10 @@ export function SettingsPage() {
     setDefaultAgent,
     userProfile,
     isTrialActive,
+    aiSettings,
+    setAISettings,
+    notificationSettings,
+    setNotificationSettings,
   } = store
   const trialActive = isTrialActive()
   const hasPremiumAccess = userProfile.plan === 'pro' || trialActive
@@ -901,6 +993,10 @@ export function SettingsPage() {
     [previewTheme]
   )
   const isPreviewAlreadyApplied = !hoveredThemeDescriptor && !importedThemePreview
+  const currentSettingsTab = useMemo(
+    () => SETTINGS_TABS.find((tab) => tab.id === settingsTab) ?? SETTINGS_TABS[0],
+    [settingsTab]
+  )
 
   useEffect(() => {
     void getAppVersion().then((version) => {
@@ -1091,86 +1187,80 @@ export function SettingsPage() {
 
   return (
     <div
-      className="premium-surface-grid h-full overflow-hidden rounded-[32px] px-4 py-5 lg:px-6 lg:py-6"
+      className="premium-surface-grid h-full overflow-hidden rounded-[32px] px-3 py-4 md:px-4 md:py-5 xl:px-6 xl:py-6"
       style={{
         background: `radial-gradient(circle at 14% 12%, ${withAlpha(activeThemeDescriptor.accent, 0.08)}, transparent 24%), radial-gradient(circle at 84% 10%, ${withAlpha(activeThemeDescriptor.secondary, 0.08)}, transparent 20%), radial-gradient(circle at 82% 84%, ${withAlpha(activeThemeDescriptor.accent, 0.06)}, transparent 18%), linear-gradient(180deg, ${activeThemeDescriptor.surface0}, ${activeThemeDescriptor.surface1})`,
       }}
     >
-      <div className="grid h-full gap-4 xl:grid-cols-[220px_1fr]">
+      <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside
-          className="premium-panel-elevated flex h-full min-h-0 flex-col rounded-[28px] p-4 md:p-5"
+          className="flex h-full min-h-0 flex-col rounded-[30px] p-5 md:p-6 liquid-glass-heavy"
           style={{
-            background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))',
             borderColor: 'var(--border)',
-            boxShadow: '0 24px 70px rgba(0,0,0,0.18)',
           }}
         >
-          <div className="mb-4 flex items-center gap-3">
-            <div className="h-11 w-11 overflow-hidden rounded-[18px] border border-white/10 shadow-[0_16px_34px_rgba(79,140,255,0.14)]">
-              <Image src="/LOGO.png" alt="SloerSpace" width={44} height={44} className="h-full w-full object-contain" />
+          <div className="mb-4 flex items-center gap-3 px-1">
+            <div className="h-10 w-10 overflow-hidden rounded-[15px] shrink-0"
+              style={{ background: '#030812', boxShadow: '0 0 0 1.5px rgba(79,140,255,0.45), 0 4px 16px rgba(79,140,255,0.28)' }}>
+              <Image src="/LOGO.png" alt="SloerSpace" width={40} height={40} className="h-full w-full object-contain" />
             </div>
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--text-muted)' }}>Executive Settings</div>
-              <div className="mt-1 text-[14px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>SloerSpace Control</div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-bold truncate" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Settings</div>
+              <div className="mt-0.5 text-[10px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>{userProfile.username}</div>
+            </div>
+            <div className="ml-auto shrink-0 premium-chip text-[9px]" style={{ color: hasPremiumAccess ? 'var(--success)' : 'var(--warning)' }}>
+              <ShieldCheck size={10} />
+              {hasPremiumAccess ? 'PREMIUM' : userProfile.plan.toUpperCase()}
             </div>
           </div>
 
-          <div className="premium-panel mb-4 rounded-[22px] p-4" style={{ background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))', borderColor: 'var(--border)' }}>
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator</div>
-                <div className="mt-1 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{userProfile.username}</div>
-              </div>
-              <div className="premium-chip" style={{ color: 'var(--success)' }}>
-                <ShieldCheck size={12} />
-                {userProfile.plan.toUpperCase()}
-              </div>
-            </div>
-            <div className="text-[11px] font-mono break-all" style={{ color: 'var(--text-secondary)' }}>{userProfile.email}</div>
+          <div className="mb-4 rounded-[20px] border px-4 py-3" style={{ background: 'linear-gradient(180deg, rgba(9,15,24,0.72), rgba(6,10,18,0.9))', borderColor: 'var(--border)' }}>
+            <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Active section</div>
+            <div className="mt-2 text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>{currentSettingsTab.label}</div>
+            <div className="mt-1 text-[10px] leading-5" style={{ color: 'var(--text-secondary)' }}>{currentSettingsTab.desc}</div>
           </div>
 
-          <div className="flex-1 space-y-2">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1" style={{ scrollbarWidth: 'none' }}>
             {SETTINGS_TABS.map((tab) => {
               const Icon = tab.icon
               const active = settingsTab === tab.id
-
               return (
                 <button key={tab.id} onClick={() => setSettingsTab(tab.id)}
-                  className="relative flex w-full items-center gap-3 rounded-[20px] px-4 py-3 text-[12px] font-semibold transition-all"
+                  className="relative flex w-full items-start gap-3 rounded-[16px] px-3.5 py-3 text-left transition-all duration-150"
                   style={{
-                    background: active ? 'linear-gradient(135deg, rgba(79,140,255,0.16), rgba(40,231,197,0.08))' : 'transparent',
-                    color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    border: `1px solid ${active ? 'rgba(163,209,255,0.18)' : 'transparent'}`,
+                    background: active ? 'linear-gradient(135deg, rgba(79,140,255,0.15), rgba(40,231,197,0.06))' : 'transparent',
+                    border: `1px solid ${active ? 'rgba(163,209,255,0.2)' : 'transparent'}`,
                   }}
                 >
                   {active && <div className="absolute inset-y-3 left-0 w-[3px] rounded-r-full" style={{ background: 'linear-gradient(180deg, var(--accent), var(--secondary))' }} />}
-                  <div className="flex h-9 w-9 items-center justify-center rounded-[16px]" style={{ background: active ? 'rgba(79,140,255,0.12)' : 'rgba(9,15,24,0.72)', color: active ? 'var(--accent)' : 'var(--text-muted)' }}>
-                    <Icon size={15} />
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[11px]"
+                    style={{ background: active ? 'rgba(79,140,255,0.18)' : 'rgba(9,15,24,0.5)', color: active ? 'var(--accent)' : 'var(--text-muted)' }}>
+                    <Icon size={14} />
                   </div>
-                  {tab.label}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11px] font-semibold" style={{ color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{tab.label}</div>
+                    <div className="mt-0.5 truncate text-[9px]" style={{ color: 'var(--text-muted)' }}>{tab.desc}</div>
+                  </div>
                 </button>
               )
             })}
           </div>
 
-          <div className="premium-panel mt-4 rounded-[22px] p-4" style={{ background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))', borderColor: 'var(--border)' }}>
-            <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
-              <Command size={12} style={{ color: 'var(--accent)' }} />
-              Quick key
-            </div>
-            <div className="premium-kbd inline-flex">Ctrl + ,</div>
+          <div className="mt-4 pt-4 border-t flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
+            <span className="text-[9px] uppercase tracking-[0.14em] font-bold" style={{ color: 'var(--text-muted)' }}>Quick open</span>
+            <div className="premium-kbd text-[9px]">Ctrl + ,</div>
           </div>
         </aside>
 
         <div
-          className="premium-panel-elevated flex min-h-0 flex-col overflow-hidden rounded-[28px]"
+          className="premium-panel-elevated flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[30px]"
           style={{
             background: 'linear-gradient(180deg, var(--surface-glass-strong), var(--surface-glass))',
             borderColor: 'var(--border)',
             boxShadow: '0 28px 90px rgba(0,0,0,0.2)',
           }}
         >
-          <div className="border-b border-[var(--border)] px-5 py-5 md:px-6 md:py-6">
+          <div className="border-b border-[var(--border)] px-5 py-5 md:px-7 md:py-6">
             <div className="mb-3 flex flex-wrap items-center gap-3">
               <div className="premium-chip" style={{ color: 'var(--warning)' }}>
                 <Sparkles size={12} />
@@ -1180,23 +1270,43 @@ export function SettingsPage() {
                 <ShieldCheck size={12} style={{ color: 'var(--success)' }} />
                 Live preferences
               </div>
+              <div className="premium-chip" style={{ color: 'var(--accent)' }}>
+                <Command size={12} />
+                {currentSettingsTab.label}
+              </div>
             </div>
-            <div className="text-3xl font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-              Settings & personalization
-            </div>
-            <div className="mt-2 text-[13px]" style={{ color: 'var(--text-secondary)' }}>
-              Tune the shell, agents, account settings and shortcuts from a single elevated control surface.
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+              <div>
+                <div className="text-3xl font-bold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
+                  Settings & personalization
+                </div>
+                <div className="mt-2 max-w-3xl text-[13px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+                  Tune the shell, agents, account settings and shortcuts from a cleaner control surface with clearer grouping, calmer spacing and less visual compression.
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:min-w-[360px]">
+                <div className="rounded-[18px] border px-4 py-3" style={{ background: 'rgba(9,15,24,0.52)', borderColor: 'var(--border)' }}>
+                  <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Workspace profile</div>
+                  <div className="mt-1 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{hasPremiumAccess ? 'Premium operator surface' : 'Core operator surface'}</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>{userProfile.plan.toUpperCase()} · {userProfile.email}</div>
+                </div>
+                <div className="rounded-[18px] border px-4 py-3" style={{ background: 'rgba(9,15,24,0.52)', borderColor: 'var(--border)' }}>
+                  <div className="text-[9px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Desktop runtime</div>
+                  <div className="mt-1 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>v{appVersion}</div>
+                  <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>{currentSettingsTab.label} · {currentSettingsTab.desc}</div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5 md:p-6">
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-6 pt-4 md:px-6 md:pb-8 md:pt-5 xl:px-7">
         {settingsTab === 'appearance' && (
-          <div className="max-w-6xl space-y-5">
+          <div className="max-w-[1500px] space-y-6">
             <input ref={themeJsonInputRef} type="file" accept=".json" className="hidden" onChange={handleThemeImport} />
             <SectionHeader icon={Palette} title="Appearance" desc="Theme studio, live previews, and surface-quality control." />
 
-            <div className="grid gap-5 xl:grid-cols-[1.18fr_0.82fr]">
-              <SettingsCard className="premium-surface-grid space-y-5">
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.08fr)_360px] 2xl:grid-cols-[minmax(0,1.14fr)_400px]">
+              <SettingsCard className="premium-surface-grid space-y-6">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Live theme preview</div>
@@ -1221,7 +1331,7 @@ export function SettingsPage() {
 
                 <ThemePreviewCanvas theme={previewTheme} />
 
-                <div className="grid gap-3 md:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   {[
                     { label: 'Readability', value: previewThemeQuality.readability, tone: previewTheme.accent },
                     { label: 'Layering', value: previewThemeQuality.layering, tone: previewTheme.secondary },
@@ -1485,6 +1595,238 @@ export function SettingsPage() {
           </div>
         )}
 
+        {settingsTab === 'ai-settings' && (
+          <div className="max-w-3xl space-y-5">
+            <SectionHeader icon={Braces} title="AI Provider" desc="Configure your AI provider, API keys, and models for command suggestions and chat." />
+
+            {/* Provider selector */}
+            <SettingsCard>
+              <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Provider</div>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { id: 'anthropic' as AIProvider, name: 'Anthropic', desc: 'Claude models', color: '#e8956a' },
+                  { id: 'openai' as AIProvider, name: 'OpenAI', desc: 'GPT-4o, o1', color: '#10a37f' },
+                  { id: 'google' as AIProvider, name: 'Google', desc: 'Gemini models', color: '#4285f4' },
+                  { id: 'ollama' as AIProvider, name: 'Ollama', desc: 'Local models (free)', color: '#f5f5f5' },
+                ]).map((p) => {
+                  const active = aiSettings.provider === p.id
+                  return (
+                    <button key={p.id} onClick={() => setAISettings({ provider: p.id })}
+                      className="flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-all"
+                      style={{
+                        background: active ? 'var(--accent-subtle)' : 'transparent',
+                        border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                      }}>
+                      <div className="w-3 h-3 rounded-full" style={{ background: p.color, boxShadow: active ? `0 0 8px ${p.color}40` : 'none' }} />
+                      <div className="flex-1">
+                        <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{p.name}</div>
+                        <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{p.desc}</div>
+                      </div>
+                      {active && <Check size={14} style={{ color: 'var(--accent)' }} />}
+                    </button>
+                  )
+                })}
+              </div>
+            </SettingsCard>
+
+            {/* API Keys */}
+            {aiSettings.provider !== 'ollama' && (
+              <SettingsCard>
+                <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>API Key</div>
+                <AIKeyInput
+                  label={aiSettings.provider === 'anthropic' ? 'Anthropic API Key' : aiSettings.provider === 'openai' ? 'OpenAI API Key' : 'Google AI API Key'}
+                  value={aiSettings.provider === 'anthropic' ? aiSettings.anthropicApiKey : aiSettings.provider === 'openai' ? aiSettings.openaiApiKey : aiSettings.googleApiKey}
+                  onChange={(val) => {
+                    if (aiSettings.provider === 'anthropic') setAISettings({ anthropicApiKey: val })
+                    else if (aiSettings.provider === 'openai') setAISettings({ openaiApiKey: val })
+                    else setAISettings({ googleApiKey: val })
+                  }}
+                  placeholder={aiSettings.provider === 'anthropic' ? 'sk-ant-...' : aiSettings.provider === 'openai' ? 'sk-...' : 'AIza...'}
+                />
+              </SettingsCard>
+            )}
+
+            {/* Ollama config */}
+            {aiSettings.provider === 'ollama' && (
+              <SettingsCard>
+                <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Ollama Configuration</div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-[10px] font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>Endpoint</label>
+                    <input type="text" value={aiSettings.ollamaEndpoint} onChange={(e) => setAISettings({ ollamaEndpoint: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg text-[12px] bg-transparent outline-none"
+                      style={{ border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium mb-1 block" style={{ color: 'var(--text-secondary)' }}>Model</label>
+                    <input type="text" value={aiSettings.ollamaModel} onChange={(e) => setAISettings({ ollamaModel: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg text-[12px] bg-transparent outline-none"
+                      style={{ border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                      placeholder="llama3.2, codellama, mistral..." />
+                  </div>
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Ollama runs locally on your machine. Install from <span style={{ color: 'var(--accent)' }}>ollama.com</span> and run <code className="px-1 py-0.5 rounded text-[9px]" style={{ background: 'var(--surface-3)' }}>ollama serve</code> to start.
+                  </p>
+                </div>
+              </SettingsCard>
+            )}
+
+            {/* Model selection for cloud providers */}
+            {aiSettings.provider !== 'ollama' && (
+              <SettingsCard>
+                <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Model</div>
+                <input type="text"
+                  value={aiSettings.provider === 'anthropic' ? aiSettings.anthropicModel : aiSettings.provider === 'openai' ? aiSettings.openaiModel : aiSettings.googleModel}
+                  onChange={(e) => {
+                    if (aiSettings.provider === 'anthropic') setAISettings({ anthropicModel: e.target.value })
+                    else if (aiSettings.provider === 'openai') setAISettings({ openaiModel: e.target.value })
+                    else setAISettings({ googleModel: e.target.value })
+                  }}
+                  className="w-full px-3 py-2 rounded-lg text-[12px] bg-transparent outline-none"
+                  style={{ border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+              </SettingsCard>
+            )}
+
+            {/* Toggles */}
+            <SettingsCard>
+              <div className="mb-3 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Features</div>
+              <div className="space-y-3">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={14} style={{ color: 'var(--accent)' }} />
+                    <div>
+                      <div className="text-[12px] font-medium" style={{ color: 'var(--text-primary)' }}>Command Suggestions</div>
+                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>AI suggests next commands in terminal</div>
+                    </div>
+                  </div>
+                  <button onClick={() => setAISettings({ commandSuggestionsEnabled: !aiSettings.commandSuggestionsEnabled })}
+                    className="w-10 h-5 rounded-full transition-all relative" style={{ background: aiSettings.commandSuggestionsEnabled ? 'var(--accent)' : 'var(--surface-3)' }}>
+                    <div className="w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all" style={{ left: aiSettings.commandSuggestionsEnabled ? 22 : 2 }} />
+                  </button>
+                </label>
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div className="flex items-center gap-2">
+                    <Bell size={14} style={{ color: 'var(--accent)' }} />
+                    <div>
+                      <div className="text-[12px] font-medium" style={{ color: 'var(--text-primary)' }}>Agent Notifications</div>
+                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Desktop alerts when swarm agents finish</div>
+                    </div>
+                  </div>
+                  <button onClick={() => setAISettings({ notificationsEnabled: !aiSettings.notificationsEnabled })}
+                    className="w-10 h-5 rounded-full transition-all relative" style={{ background: aiSettings.notificationsEnabled ? 'var(--accent)' : 'var(--surface-3)' }}>
+                    <div className="w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all" style={{ left: aiSettings.notificationsEnabled ? 22 : 2 }} />
+                  </button>
+                </label>
+              </div>
+            </SettingsCard>
+          </div>
+        )}
+
+        {settingsTab === 'help' && (
+          <div className="max-w-3xl space-y-5">
+            <SectionHeader icon={HelpCircle} title="Help & Reference" desc="Complete guide to SloerSpace features, keyboard shortcuts, and workflows." />
+
+            {/* Features Overview */}
+            <SettingsCard>
+              <div className="mb-4 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Features</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[
+                  { icon: Terminal, name: 'Terminal Grid', desc: 'Multi-pane terminal with PTY streaming, command blocks, session timeline, and workspace tabs.' },
+                  { icon: Zap, name: 'SloerSwarm', desc: 'Multi-agent AI orchestration. Launch parallel agents with live telemetry and operator control.' },
+                  { icon: Globe, name: 'SloerBrowser', desc: 'Native WebView2 browser with tabs, bookmarks, split terminal, pin/restore, DevTools.' },
+                  { icon: Layers, name: 'SloerCanvas', desc: 'Free-form canvas with draggable terminal panes. Position and resize sessions freely.' },
+                  { icon: MessageSquare, name: 'AI Chat', desc: 'Contextual AI assistant (Ctrl+J). Supports Anthropic, OpenAI, Google, and local Ollama.' },
+                  { icon: Sparkles, name: 'AI Provider', desc: 'Configure API keys, models, and toggle AI features in Settings > AI Provider.' },
+                  { icon: Bot, name: 'Agent Library', desc: 'Manage custom AI agents and default CLI agent for terminal and swarm tasks.' },
+                  { icon: FileText, name: 'Prompt Library', desc: 'Save, organize, and reuse prompt templates across workspaces.' },
+                  { icon: Database, name: 'Kanban Board', desc: 'Drag-and-drop task board with priority levels and agent assignment.' },
+                  { icon: Palette, name: '15+ Themes', desc: 'Dark and light themes with live preview. Import/export custom themes as JSON.' },
+                  { icon: Mic, name: 'SiulkVoice', desc: 'Voice-to-text dictation with Push-to-Talk and Toggle modes.' },
+                  { icon: Bell, name: 'Notifications', desc: 'Desktop alerts when swarm agents complete tasks. Toggle in AI Provider settings.' },
+                ].map((f) => (
+                  <div key={f.name} className="flex items-start gap-3 p-3 rounded-xl" style={{ background: 'var(--surface-1)', border: '1px solid var(--border)' }}>
+                    <f.icon size={16} className="shrink-0 mt-0.5" style={{ color: 'var(--accent)' }} />
+                    <div>
+                      <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{f.name}</div>
+                      <div className="text-[10px] leading-relaxed mt-0.5" style={{ color: 'var(--text-muted)' }}>{f.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </SettingsCard>
+
+            {/* Keyboard Shortcuts */}
+            <SettingsCard>
+              <div className="mb-4 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Keyboard Shortcuts</div>
+              <div className="space-y-1">
+                {[
+                  { section: 'Global' },
+                  { key: 'Ctrl+K', action: 'Open Command Palette' },
+                  { key: 'Ctrl+J', action: 'Toggle AI Chat Panel' },
+                  { key: 'Ctrl+B', action: 'Open Browser' },
+                  { key: 'Ctrl+,', action: 'Open Settings' },
+                  { section: 'Workspaces' },
+                  { key: 'Ctrl+T', action: 'New Terminal Workspace' },
+                  { key: 'Ctrl+S', action: 'Launch SloerSwarm' },
+                  { key: 'Ctrl+Shift+W', action: 'Close Active Workspace' },
+                  { key: 'Ctrl+Shift+]', action: 'Next Workspace Tab' },
+                  { key: 'Ctrl+Shift+[', action: 'Previous Workspace Tab' },
+                  { section: 'Terminal' },
+                  { key: 'Ctrl+N', action: 'New Terminal Pane' },
+                  { key: 'Ctrl+D', action: 'Split Right' },
+                  { key: 'Ctrl+Shift+D', action: 'Split Down' },
+                  { key: 'Ctrl+]', action: 'Next Pane' },
+                  { key: 'Ctrl+[', action: 'Previous Pane' },
+                  { key: 'Ctrl+Shift+C', action: 'Copy Selection (in PTY)' },
+                  { key: 'Ctrl+Shift+V', action: 'Paste (in PTY)' },
+                  { section: 'Browser' },
+                  { key: 'Ctrl+L', action: 'Focus URL Bar' },
+                  { key: 'Ctrl+R', action: 'Refresh Page' },
+                  { key: 'Ctrl+Shift+I', action: 'Toggle DevTools' },
+                  { key: 'Ctrl+Shift+T', action: 'Restore Closed Tab' },
+                ].map((item, i) => (
+                  'section' in item ? (
+                    <div key={i} className="pt-3 pb-1 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--accent)' }}>{item.section}</div>
+                  ) : (
+                    <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-[rgba(255,255,255,0.03)]">
+                      <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>{item.action}</span>
+                      <kbd className="px-2 py-0.5 text-[9px] font-mono rounded-md" style={{ background: 'var(--surface-3)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>{item.key}</kbd>
+                    </div>
+                  )
+                ))}
+              </div>
+            </SettingsCard>
+
+            {/* Getting Started */}
+            <SettingsCard>
+              <div className="mb-4 text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Getting Started</div>
+              <div className="space-y-3">
+                {[
+                  { step: '1', title: 'Set up AI Provider', desc: 'Go to Settings → AI Provider. Choose Anthropic/OpenAI/Google or local Ollama. Enter your API key.' },
+                  { step: '2', title: 'Create a workspace', desc: 'Click SloerSpace on Home or press Ctrl+T. Choose your terminal layout (1-16 panes) and working directory.' },
+                  { step: '3', title: 'Use AI Chat', desc: 'Press Ctrl+J or click the AI button in the title bar. Ask questions about commands, code, or debugging.' },
+                  { step: '4', title: 'Launch a Swarm', desc: 'Click SloerSwarm on Home or press Ctrl+S. Configure your agent fleet, objective, and working directory.' },
+                  { step: '5', title: 'Browse the web', desc: 'Click SloerBrowser on Home or press Ctrl+B. Native WebView2 engine — no restrictions.' },
+                ].map((s) => (
+                  <div key={s.step} className="flex items-start gap-3">
+                    <div className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 text-[10px] font-bold" style={{ background: 'var(--accent-subtle)', color: 'var(--accent)' }}>{s.step}</div>
+                    <div>
+                      <div className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{s.title}</div>
+                      <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{s.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </SettingsCard>
+
+            {/* Version */}
+            <div className="text-center py-4">
+              <div className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>SloerSpace Dev v1.0.0</div>
+              <div className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>Built with Tauri 2 + Next.js 14 + Rust</div>
+            </div>
+          </div>
+        )}
+
         {settingsTab === 'account' && (
           <div className="max-w-[760px] space-y-5">
             <SectionHeader icon={User} title="Account" desc="Manage your profile, billing, and current session." />
@@ -1709,6 +2051,430 @@ export function SettingsPage() {
                 </SettingsCard>
               </div>
             )}
+          </div>
+        )}
+
+        {settingsTab === 'siulk-voice' && (
+          <div className="max-w-3xl space-y-5">
+            <SectionHeader icon={Mic} title="SiulkVoice" desc="Native voice-to-text dictation powered by on-device Whisper — fully offline and private." />
+
+            <SettingsCard className="premium-surface-grid">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>Enable SiulkVoice</div>
+                  <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>Show the voice dictation widget in the header bar.</div>
+                </div>
+                <button
+                  onClick={() => store.setSiulkVoiceEnabled(!store.siulkVoice.enabled)}
+                  className="relative h-7 w-12 rounded-full transition-all duration-300"
+                  style={{
+                    background: store.siulkVoice.enabled
+                      ? 'linear-gradient(135deg, var(--accent), var(--secondary))'
+                      : 'var(--surface-3)',
+                    boxShadow: store.siulkVoice.enabled ? '0 4px 18px var(--accent-glow)' : 'none',
+                  }}
+                >
+                  <div
+                    className="absolute top-1 h-5 w-5 rounded-full bg-white shadow-md transition-all duration-300"
+                    style={{ left: store.siulkVoice.enabled ? 'calc(100% - 24px)' : '4px' }}
+                  />
+                </button>
+              </div>
+            </SettingsCard>
+
+            <SettingsCard className="premium-surface-grid space-y-5">
+              <div className="rounded-[22px] border p-5" style={{ background: 'linear-gradient(180deg, rgba(9,15,24,0.84), rgba(6,10,18,0.92))', borderColor: 'var(--border)' }}>
+                <div className="flex items-center justify-between gap-4 mb-1">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'var(--accent-subtle)', border: '1px solid rgba(79,140,255,0.15)' }}>
+                      <Mic size={16} style={{ color: 'var(--accent)' }} />
+                    </div>
+                    <div>
+                      <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>Push-to-Talk</div>
+                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Hold key to record, release to stop and transcribe.</div>
+                    </div>
+                  </div>
+                  <span className="rounded-full px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider" style={{ background: store.siulkVoice.pushToTalkKey ? 'rgba(46,213,115,0.12)' : 'var(--surface-3)', color: store.siulkVoice.pushToTalkKey ? 'var(--success)' : 'var(--text-muted)' }}>
+                    {store.siulkVoice.pushToTalkKey ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+                <div className="mt-4 flex items-center gap-3">
+                  <div className="flex-1 rounded-[14px] border px-4 py-2.5 font-mono text-[11px]" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)', color: store.siulkVoice.pushToTalkKey ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                    {store.siulkVoice.pushToTalkKey || 'Not set'}
+                  </div>
+                  <button
+                    onClick={() => {
+                      const handler = (e: KeyboardEvent) => {
+                        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return
+                        e.preventDefault()
+                        const parts: string[] = []
+                        if (e.ctrlKey) parts.push('Ctrl')
+                        if (e.altKey) parts.push('Alt')
+                        if (e.shiftKey) parts.push('Shift')
+                        if (e.metaKey) parts.push('Meta')
+                        parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key)
+                        store.setSiulkVoicePushToTalkKey(parts.join('+'))
+                        window.removeEventListener('keydown', handler)
+                      }
+                      window.addEventListener('keydown', handler)
+                      addToast('Press a key combination for Push-to-Talk...', 'info', 3000)
+                    }}
+                    className="btn-secondary text-[10px] px-4 py-2"
+                  >
+                    Set Key
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-[22px] border p-5" style={{ background: 'linear-gradient(180deg, rgba(9,15,24,0.84), rgba(6,10,18,0.92))', borderColor: 'var(--border)' }}>
+                <div className="flex items-center justify-between gap-4 mb-1">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'var(--accent-subtle)', border: '1px solid rgba(79,140,255,0.15)' }}>
+                      <Radio size={16} style={{ color: 'var(--accent)' }} />
+                    </div>
+                    <div>
+                      <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>Toggle Recording</div>
+                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Press once to start recording, press again to stop.</div>
+                    </div>
+                  </div>
+                  <span className="rounded-full px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider" style={{ background: store.siulkVoice.toggleRecordingKey ? 'rgba(46,213,115,0.12)' : 'var(--surface-3)', color: store.siulkVoice.toggleRecordingKey ? 'var(--success)' : 'var(--text-muted)' }}>
+                    {store.siulkVoice.toggleRecordingKey ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+                <div className="mt-4 flex items-center gap-3">
+                  <div className="flex-1 rounded-[14px] border px-4 py-2.5 font-mono text-[11px]" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)', color: store.siulkVoice.toggleRecordingKey ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                    {store.siulkVoice.toggleRecordingKey || 'Not set'}
+                  </div>
+                  <button
+                    onClick={() => {
+                      const handler = (e: KeyboardEvent) => {
+                        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return
+                        e.preventDefault()
+                        const parts: string[] = []
+                        if (e.ctrlKey) parts.push('Ctrl')
+                        if (e.altKey) parts.push('Alt')
+                        if (e.shiftKey) parts.push('Shift')
+                        if (e.metaKey) parts.push('Meta')
+                        parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key)
+                        store.setSiulkVoiceToggleRecordingKey(parts.join('+'))
+                        window.removeEventListener('keydown', handler)
+                      }
+                      window.addEventListener('keydown', handler)
+                      addToast('Press a key combination for Toggle Recording...', 'info', 3000)
+                    }}
+                    className="btn-secondary text-[10px] px-4 py-2"
+                  >
+                    Set Key
+                  </button>
+                </div>
+              </div>
+            </SettingsCard>
+
+            <SettingsCard className="premium-surface-grid space-y-5">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>AI Model</div>
+                <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>Choose the local Whisper tier that balances speed, quality and executive-grade throughput.</div>
+              </div>
+
+              {(() => {
+                const WHISPER_TIERS: { id: WhisperModel; label: string; speed: string; accuracy: string; size: string; icon: React.ElementType; active: boolean }[] = [
+                  { id: 'tiny.en', label: 'Tiny.en', speed: 'Blazing', accuracy: 'Good', size: '75 MB', icon: Zap, active: true },
+                  { id: 'base.en', label: 'Base.en', speed: 'Fast', accuracy: 'High', size: '142 MB', icon: Server, active: false },
+                  { id: 'large-v3', label: 'Large v3', speed: 'Slow', accuracy: 'SOTA', size: '2.9 GB', icon: Activity, active: false },
+                ]
+                return (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    {WHISPER_TIERS.map((tier) => {
+                      const isSelected = store.siulkVoice.whisperModel === tier.id
+                      const TierIcon = tier.icon
+                      return (
+                        <button
+                          key={tier.id}
+                          onClick={() => store.setWhisperModel(tier.id)}
+                          className="relative rounded-[20px] border p-5 text-left transition-all"
+                          style={{
+                            background: isSelected
+                              ? 'linear-gradient(135deg, rgba(79,140,255,0.12), rgba(40,231,197,0.06))'
+                              : 'var(--surface-1)',
+                            borderColor: isSelected ? 'var(--accent)' : 'var(--border)',
+                            boxShadow: isSelected ? '0 12px 36px var(--accent-glow)' : 'none',
+                          }}
+                        >
+                          {isSelected && (
+                            <div className="absolute top-4 right-4 rounded-full px-2 py-0.5 text-[9px] font-bold" style={{ background: 'rgba(79,140,255,0.2)', color: 'var(--accent)', border: '1px solid var(--accent)' }}>
+                              Active
+                            </div>
+                          )}
+                          <TierIcon size={20} style={{ color: isSelected ? 'var(--accent)' : 'var(--text-muted)' }} />
+                          <div className="mt-3 text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{tier.label}</div>
+                          <div className="mt-2 space-y-0.5">
+                            <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Speed: {tier.speed}</div>
+                            <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Accuracy: {tier.accuracy}</div>
+                            <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{tier.size}</div>
+                          </div>
+                          {isSelected && (
+                            <div className="mt-3 flex items-center gap-1.5">
+                              <div className="h-1.5 w-1.5 rounded-full" style={{ background: 'var(--accent)' }} />
+                              <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>ACTIVE</span>
+                            </div>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </SettingsCard>
+
+            <SettingsCard className="premium-surface-grid space-y-4">
+              {(() => {
+                const LANG_OPTIONS: { id: WhisperLanguage; label: string; native: string }[] = [
+                  { id: 'en', label: 'English', native: 'English' },
+                  { id: 'es', label: 'Spanish', native: 'Español' },
+                  { id: 'fr', label: 'French', native: 'Français' },
+                  { id: 'de', label: 'German', native: 'Deutsch' },
+                  { id: 'ja', label: 'Japanese', native: '日本語' },
+                  { id: 'zh', label: 'Chinese', native: '中文' },
+                ]
+                return (
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Whisper Language</div>
+                    <div className="relative">
+                      <select
+                        value={store.siulkVoice.whisperLanguage}
+                        onChange={(e) => store.setWhisperLanguage(e.target.value as WhisperLanguage)}
+                        className="w-full appearance-none rounded-[14px] border px-4 py-3 text-[12px] font-semibold pr-10 cursor-pointer"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(79,140,255,0.08), rgba(40,231,197,0.04))',
+                          borderColor: 'var(--accent)',
+                          color: 'var(--text-primary)',
+                          outline: 'none',
+                        }}
+                      >
+                        {LANG_OPTIONS.map((lang) => (
+                          <option key={lang.id} value={lang.id} style={{ background: 'rgb(8,13,22)', color: 'var(--text-primary)' }}>
+                            {lang.native}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDownIcon size={14} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--accent)' }} />
+                    </div>
+                  </div>
+                )
+              })()}
+            </SettingsCard>
+
+            <SettingsCard className="premium-surface-grid space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Microphone</div>
+                </div>
+                <button className="btn-ghost text-[10px] flex items-center gap-1.5" style={{ color: 'var(--accent)' }} onClick={() => addToast('Refreshing microphone list...', 'info', 2000)}>
+                  <RefreshCw size={11} /> Refresh
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  onClick={() => store.setSiulkVoiceSelectedMicrophone(null)}
+                  className="w-full flex items-center gap-3 rounded-[16px] border px-4 py-3 text-left transition-all"
+                  style={{
+                    background: !store.siulkVoice.selectedMicrophone ? 'var(--accent-subtle)' : 'var(--surface-1)',
+                    borderColor: !store.siulkVoice.selectedMicrophone ? 'var(--accent)' : 'var(--border)',
+                  }}
+                >
+                  <div className="h-4 w-4 rounded-full flex items-center justify-center" style={{ border: `2px solid ${!store.siulkVoice.selectedMicrophone ? 'var(--accent)' : 'var(--text-muted)'}` }}>
+                    {!store.siulkVoice.selectedMicrophone && <div className="h-2 w-2 rounded-full" style={{ background: 'var(--accent)' }} />}
+                  </div>
+                  <div>
+                    <div className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>System Default</div>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Use the operating system default microphone</div>
+                  </div>
+                </button>
+              </div>
+            </SettingsCard>
+
+            <SettingsCard className="premium-surface-grid">
+              <div className="text-[10px] font-bold uppercase tracking-[0.18em] mb-4" style={{ color: 'var(--text-muted)' }}>How It Works</div>
+              <div className="space-y-3 text-[11px] leading-5" style={{ color: 'var(--text-secondary)' }}>
+                <p><span className="font-semibold" style={{ color: 'var(--accent)' }}>Push-to-Talk:</span> Hold the configured shortcut key to record. Release to stop and transcribe automatically.</p>
+                <p><span className="font-semibold" style={{ color: 'var(--accent)' }}>Toggle Recording:</span> Press the shortcut key once to start recording. Press it again to stop and transcribe.</p>
+                <p><span className="font-semibold" style={{ color: 'var(--accent)' }}>Click:</span> Click the Voice pill in the header to start. Click again or press the stop button to transcribe.</p>
+                <div className="mt-3 rounded-[14px] border px-4 py-3 text-[10px]" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                  All transcription runs fully on-device using the selected Whisper model — no audio is ever sent to the cloud.
+                </div>
+              </div>
+            </SettingsCard>
+          </div>
+        )}
+
+        {settingsTab === 'notifications' && (
+          <div className="max-w-2xl space-y-5">
+            <SectionHeader icon={Bell} title="Notifications" desc="Configure sounds and system alerts for agent activity." />
+
+            <SettingsCard className="space-y-4">
+              {[
+                {
+                  key: 'sounds' as const,
+                  label: 'Notification sounds',
+                  desc: 'Play a short tone when an agent completes, errors, or goes idle.',
+                },
+                {
+                  key: 'os' as const,
+                  label: 'OS notifications',
+                  desc: 'Show a system notification when an agent changes status, even when SloerSpace is in the background.',
+                },
+              ].map(({ key, label, desc }) => (
+                <div key={key} className="flex items-center justify-between gap-4 p-4 rounded-[18px] transition-all"
+                  style={{ background: 'var(--surface-1)', border: '1px solid var(--border)' }}>
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{label}</div>
+                    <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{desc}</div>
+                  </div>
+                  <button
+                    onClick={() => setNotificationSettings({ [key]: !notificationSettings[key] })}
+                    className="relative shrink-0 h-6 w-11 rounded-full transition-all duration-200"
+                    style={{
+                      background: notificationSettings[key]
+                        ? 'linear-gradient(135deg, var(--accent), var(--secondary))'
+                        : 'rgba(255,255,255,0.1)',
+                      boxShadow: notificationSettings[key] ? '0 4px 16px var(--accent-glow)' : 'none',
+                    }}
+                  >
+                    <div className="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all duration-200"
+                      style={{ left: notificationSettings[key] ? 'calc(100% - 22px)' : '2px', boxShadow: '0 2px 6px rgba(0,0,0,0.3)' }} />
+                  </button>
+                </div>
+              ))}
+            </SettingsCard>
+
+            <SettingsCard>
+              <div className="text-[11px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Notification events</div>
+              <div className="space-y-2">
+                {[
+                  { event: 'Agent completes task', status: notificationSettings.sounds || notificationSettings.os },
+                  { event: 'Agent encounters error', status: notificationSettings.sounds || notificationSettings.os },
+                  { event: 'Workspace launched', status: notificationSettings.os },
+                  { event: 'Swarm mission finished', status: notificationSettings.sounds || notificationSettings.os },
+                ].map(({ event, status }) => (
+                  <div key={event} className="flex items-center gap-3 py-2 px-3 rounded-[14px]" style={{ background: 'var(--surface-1)', border: '1px solid var(--border)' }}>
+                    <div className="w-2 h-2 rounded-full shrink-0" style={{ background: status ? 'var(--success)' : 'var(--text-muted)' }} />
+                    <span className="flex-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{event}</span>
+                    <span className="text-[9px] font-bold uppercase rounded px-2 py-0.5" style={{
+                      background: status ? 'rgba(40,231,197,0.1)' : 'rgba(255,255,255,0.04)',
+                      color: status ? 'var(--success)' : 'var(--text-muted)',
+                    }}>{status ? 'Active' : 'Muted'}</span>
+                  </div>
+                ))}
+              </div>
+            </SettingsCard>
+          </div>
+        )}
+
+        {settingsTab === 'cli' && (
+          <div className="max-w-3xl space-y-5">
+            <SectionHeader icon={MonitorSmartphone} title="CLI" desc="Install and configure the sloerspace command-line interface." />
+
+            <SettingsCard className="premium-surface-grid space-y-5">
+              <div className="rounded-[22px] border p-5" style={{ background: 'linear-gradient(180deg, rgba(9,15,24,0.84), rgba(6,10,18,0.92))', borderColor: 'var(--border)' }}>
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px]" style={{ background: 'var(--accent-subtle)', border: '1px solid rgba(79,140,255,0.15)', boxShadow: '0 12px 28px var(--accent-glow)' }}>
+                    <MonitorSmartphone size={20} style={{ color: 'var(--accent)' }} />
+                  </div>
+                  <div>
+                    <div className="text-[14px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>sloerspace CLI</div>
+                    <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                      Install the <code className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: 'var(--surface-3)', color: 'var(--accent)' }}>sloerspace</code> command to open projects, manage workspaces, and control the app from any terminal.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Installation</div>
+                <div className="rounded-[18px] border p-4" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                  <div className="mb-3 text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>PowerShell (Windows)</div>
+                  <div className="rounded-[14px] border px-4 py-3 font-mono text-[10px] leading-5" style={{ background: 'var(--terminal-bg)', borderColor: 'var(--border)', color: 'var(--terminal-text)' }}>
+                    <span style={{ color: 'var(--accent)' }}>$</span> npm install -g @sloerspace/cli
+                  </div>
+                </div>
+
+                <div className="rounded-[18px] border p-4" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                  <div className="mb-3 text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>Verify installation</div>
+                  <div className="rounded-[14px] border px-4 py-3 font-mono text-[10px] leading-5" style={{ background: 'var(--terminal-bg)', borderColor: 'var(--border)', color: 'var(--terminal-text)' }}>
+                    <span style={{ color: 'var(--accent)' }}>$</span> sloerspace --version
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Usage</div>
+                <div className="rounded-[18px] border overflow-hidden" style={{ background: 'var(--surface-1)', borderColor: 'var(--border)' }}>
+                  {[
+                    { cmd: 'sloerspace open .', desc: 'Open the current directory as a workspace' },
+                    { cmd: 'sloerspace open /path/to/project', desc: 'Open a specific project directory' },
+                    { cmd: 'sloerspace swarm --agents 4', desc: 'Launch a swarm session with 4 agents' },
+                    { cmd: 'sloerspace status', desc: 'Show the current app and workspace status' },
+                  ].map((item, index) => (
+                    <div key={item.cmd} className="flex items-center gap-4 px-4 py-3" style={{ borderBottom: index < 3 ? '1px solid var(--border)' : 'none' }}>
+                      <code className="shrink-0 rounded-[10px] px-3 py-1.5 font-mono text-[10px]" style={{ background: 'var(--surface-3)', color: 'var(--accent)' }}>{item.cmd}</code>
+                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{item.desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </SettingsCard>
+          </div>
+        )}
+
+        {settingsTab === 'terminal' && (
+          <div className="max-w-3xl space-y-5">
+            <SectionHeader icon={Terminal} title="Terminal" desc="Configure which shell is used for new terminal sessions." />
+
+            <SettingsCard className="premium-surface-grid space-y-5">
+              <div>
+                <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>Default Shell</div>
+                <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>New terminals will use your selected shell. Override per terminal from the right-click menu.</div>
+              </div>
+
+              <div className="space-y-2">
+                {([
+                  { id: 'auto' as const, label: 'System Default (auto-detect)', desc: 'Automatically select the best available shell', badge: null, path: null },
+                  { id: 'powershell' as const, label: 'Windows PowerShell', desc: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', badge: 'powershell', path: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' },
+                  { id: 'command-prompt' as const, label: 'Command Prompt', desc: 'C:\\Windows\\system32\\cmd.exe', badge: 'cmd', path: 'C:\\Windows\\system32\\cmd.exe' },
+                  { id: 'git-bash' as const, label: 'Git Bash', desc: 'C:\\Windows\\system32\\bash.exe', badge: 'bash', path: 'C:\\Windows\\system32\\bash.exe' },
+                ] as const).map((shell) => {
+                  const active = store.terminalSettings.defaultShell === shell.id
+                  return (
+                    <button
+                      key={shell.id}
+                      onClick={() => store.setTerminalDefaultShell(shell.id)}
+                      className="w-full flex items-center gap-3 rounded-[18px] border px-5 py-4 text-left transition-all"
+                      style={{
+                        background: active
+                          ? 'linear-gradient(135deg, rgba(79,140,255,0.12), rgba(40,231,197,0.06))'
+                          : 'var(--surface-1)',
+                        borderColor: active ? 'var(--accent)' : 'var(--border)',
+                        boxShadow: active ? '0 12px 36px var(--accent-glow)' : 'none',
+                      }}
+                    >
+                      <div className="h-5 w-5 rounded-full flex items-center justify-center shrink-0" style={{ border: `2px solid ${active ? 'var(--accent)' : 'var(--text-muted)'}` }}>
+                        {active && <div className="h-2.5 w-2.5 rounded-full" style={{ background: 'var(--accent)', boxShadow: '0 4px 12px var(--accent-glow)' }} />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{shell.label}</span>
+                          {shell.badge && (
+                            <span className="rounded-md px-2 py-0.5 text-[9px] font-mono" style={{ background: 'var(--surface-3)', color: 'var(--text-muted)' }}>{shell.badge}</span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 truncate text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{shell.desc}</div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </SettingsCard>
           </div>
         )}
 

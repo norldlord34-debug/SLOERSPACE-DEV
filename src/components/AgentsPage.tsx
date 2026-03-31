@@ -79,9 +79,9 @@ export function AgentsPage() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 cascade-in perspective-container">
             {customAgents.map((agent) => (
-              <div key={agent.id} className="premium-panel group overflow-hidden p-5 transition-all duration-300 hover:-translate-y-1">
+              <div key={agent.id} className="group overflow-hidden p-5 liquid-glass hover-lift-3d chromatic-border rounded-[24px]">
                 <div className="mb-3 flex items-start justify-between">
                   <div className="flex items-center gap-2">
                     <div className="flex h-10 w-10 items-center justify-center rounded-[18px] bg-[rgba(79,140,255,0.12)] text-[var(--accent)] shadow-[0_16px_34px_rgba(79,140,255,0.12)]">

@@ -36,7 +36,7 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           <X size={16} />
         </button>
 
-        <div className="grid md:grid-cols-2 gap-0 rounded-[24px] overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+        <div className="grid md:grid-cols-2 gap-0 rounded-[24px] overflow-hidden liquid-glass-heavy chromatic-border" style={{ border: '1px solid var(--border)' }}>
           {/* Free Plan */}
           <div className="p-6 md:p-8" style={{ background: 'linear-gradient(180deg, rgba(8,13,22,0.98), rgba(5,9,16,0.99))' }}>
             <div className="flex items-center gap-3 mb-4">

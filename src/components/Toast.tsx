@@ -51,14 +51,13 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
 
   return (
     <div
-      className="flex items-center gap-3 px-4 py-3 rounded-2xl backdrop-blur-xl shadow-2xl transition-all duration-300"
+      className="flex items-center gap-3 px-4 py-3 rounded-2xl liquid-glass transition-all duration-300"
       style={{
         background: color.bg,
         border: `1px solid ${color.border}`,
-        backdropFilter: 'blur(20px) saturate(1.2)',
-        boxShadow: '0 16px 40px rgba(0,0,0,0.3)',
+        boxShadow: exiting ? '0 8px 20px rgba(0,0,0,0.2)' : '0 20px 50px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08)',
         opacity: exiting ? 0 : 1,
-        transform: exiting ? 'translateX(100px) scale(0.95)' : 'translateX(0) scale(1)',
+        transform: exiting ? 'translateX(100px) scale(0.92) rotateY(-5deg)' : 'translateX(0) scale(1) rotateY(0deg)',
         minWidth: '280px',
         maxWidth: '420px',
       }}

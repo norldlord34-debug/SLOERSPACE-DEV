@@ -18,6 +18,8 @@ import {
   writeTerminalSessionInput,
   startPtyStream,
   closeTerminalSession,
+  handleDroppedFiles,
+  isTauriApp,
   SystemInfo,
   TerminalCapabilities,
   TerminalSessionEvent,
@@ -132,6 +134,18 @@ function getShellKindLabel(shellKind?: TerminalPane['shellKind'] | null) {
   if (shellKind === 'command-prompt') return 'Command Prompt'
   if (shellKind === 'git-bash') return 'Git Bash'
   return null
+}
+
+function hasExplicitPaneLayout(pane: TerminalPane) {
+  return typeof pane.layoutColumn === 'number' || typeof pane.layoutRow === 'number'
+}
+
+function getPaneLayoutColumn(pane: TerminalPane, fallbackColumn: number) {
+  return typeof pane.layoutColumn === 'number' ? Math.max(0, Math.trunc(pane.layoutColumn)) : fallbackColumn
+}
+
+function getPaneLayoutRow(pane: TerminalPane) {
+  return typeof pane.layoutRow === 'number' ? Math.max(0, Math.trunc(pane.layoutRow)) : 0
 }
 
 function getFriendlyOsName(os?: string | null) {
@@ -660,7 +674,7 @@ const SLOERSPACE_TERMINAL_THEME = {
   brightWhite: '#ffffff',
 }
 
-const PtyTerminalEmulator = React.memo(function PtyTerminalEmulator({
+export const PtyTerminalEmulator = React.memo(function PtyTerminalEmulator({
   sessionId,
   cwd,
   paneIndex = 0,
@@ -1190,7 +1204,7 @@ const SessionTimelinePanel = React.memo(function SessionTimelinePanel({
   )
 })
 
-const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, paneIndex = 0, isOnly, onMaximize, isMaximized, isFocused, broadcastPanes, shellName, osName, capabilities, onActivate, compactMode = false }: {
+const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, paneIndex = 0, isOnly, onMaximize, isMaximized, isFocused, broadcastPanes, shellName, osName, capabilities, onActivate, onSplitRight, onSplitDown, compactMode = false }: {
   pane: TerminalPane
   paneIndex?: number
   isOnly: boolean
@@ -1202,6 +1216,8 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, paneIndex = 0,
   osName: string
   capabilities?: TerminalCapabilities | null
   onActivate?: () => void
+  onSplitRight?: () => void
+  onSplitDown?: () => void
   compactMode?: boolean
 }) {
   const addCommandBlock = useStore((s) => s.addCommandBlock)
@@ -1939,6 +1955,16 @@ const TerminalPaneUI = React.memo(function TerminalPaneUI({ pane, paneIndex = 0,
               {successCount}✓{errorCount > 0 && <span style={{ color: 'var(--error)' }}> {errorCount}✗</span>}
             </span>
           )}
+          {onSplitRight && (
+            <button onClick={onSplitRight} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Split Right (Ctrl+D)" style={{ color: 'var(--text-muted)' }}>
+              <Columns2 size={12} />
+            </button>
+          )}
+          {onSplitDown && (
+            <button onClick={onSplitDown} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title="Split Down (Ctrl+Shift+D)" style={{ color: 'var(--text-muted)' }}>
+              <Columns2 size={12} style={{ transform: 'rotate(90deg)' }} />
+            </button>
+          )}
           {!isOnly && (
             <button onClick={onMaximize} className="p-1 rounded-lg transition-all hover:bg-[rgba(255,255,255,0.06)]" title={isMaximized ? 'Restore' : 'Maximize'} style={{ color: 'var(--text-muted)' }}>
               {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
@@ -2577,6 +2603,8 @@ export function TerminalView() {
   const terminalSessions = useStore((s) => s.terminalSessions)
   const workspaceTabs = useStore((s) => s.workspaceTabs)
   const setActivePane = useStore((s) => s.setActivePane)
+  const addPaneToActiveWorkspace = useStore((s) => s.addPaneToActiveWorkspace)
+  const setActiveWorkspaceSplitDirection = useStore((s) => s.setActiveWorkspaceSplitDirection)
 
   const terminalPanes = useMemo(
     () => (activeTabId ? (terminalSessions[activeTabId] ?? []) : []),
@@ -2601,8 +2629,81 @@ export function TerminalView() {
   const [zenMode, setZenMode] = useState(false)
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
   const [capabilities, setCapabilities] = useState<TerminalCapabilities | null>(null)
+  const [isDragOver, setIsDragOver] = useState(false)
   const previousTabIdRef = useRef<string | null>(null)
   const trackedRuntimeSessionIdsRef = useRef<string[]>([])
+  const dragCounterRef = useRef(0)
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current += 1
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragOver(true)
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0
+      setIsDragOver(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+    dragCounterRef.current = 0
+
+    if (!isTauriApp()) return
+
+    const files = e.dataTransfer.files
+    if (!files || files.length === 0) return
+
+    const paths: string[] = []
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      if ((file as File & { path?: string }).path) {
+        paths.push((file as File & { path?: string }).path as string)
+      } else if (file.name) {
+        paths.push(file.name)
+      }
+    }
+
+    if (paths.length === 0) return
+
+    const results = await handleDroppedFiles(paths)
+    if (results.length === 0) return
+
+    const targetPane = terminalPanes.find((p) => p.id === activePaneId)
+      ?? terminalPanes.find((p) => p.isActive)
+      ?? terminalPanes[0]
+
+    if (!targetPane) return
+
+    const sessionId = targetPane.runtimeSessionId ?? targetPane.id
+
+    for (const result of results) {
+      if (result.isImage && result.iterm2Sequence) {
+        await writeTerminalSessionInput(sessionId, result.iterm2Sequence)
+      } else {
+        const pathText = results.length === 1
+          ? result.escapedPath
+          : result.escapedPath + ' '
+        await writeTerminalSessionInput(sessionId, pathText)
+      }
+    }
+  }, [activePaneId, terminalPanes])
 
   const runningPanes = terminalPanes.filter((p) => p.isRunning).length
   const defaultShellName = systemInfo ? getFriendlyShellName(systemInfo.shell) : getClientShellFallback()
@@ -2628,6 +2729,21 @@ export function TerminalView() {
     setActivePaneId(paneId)
     setActivePane(paneId)
   }, [setActivePane])
+
+  const splitFromPane = useCallback((pane: TerminalPane | null, direction: 'vertical' | 'horizontal') => {
+    if (!pane) {
+      return
+    }
+
+    setActiveWorkspaceSplitDirection(direction)
+    addPaneToActiveWorkspace({
+      anchorPaneId: pane.id,
+      workingDirectory: pane.cwd,
+      shellKind: pane.shellKind,
+      splitDirection: direction,
+    })
+    setViewMode('grid')
+  }, [addPaneToActiveWorkspace, setActiveWorkspaceSplitDirection])
 
   useEffect(() => {
     let cancelled = false
@@ -2770,6 +2886,32 @@ export function TerminalView() {
     const paneBackendKind = terminalPanes.find((pane) => pane.runtimeSession?.backendKind)?.runtimeSession?.backendKind
     return paneBackendKind || capabilities?.backendKind || 'persistent-pty'
   }, [capabilities?.backendKind, terminalPanes])
+  const customGridColumns = useMemo(() => {
+    if (viewMode !== 'grid') {
+      return []
+    }
+
+    const positioned = terminalPanes
+      .map((pane, originalIndex) => ({
+        pane,
+        originalIndex,
+        column: getPaneLayoutColumn(pane, originalIndex),
+        row: getPaneLayoutRow(pane),
+      }))
+
+    if (positioned.length === 0 || positioned.some((entry) => !hasExplicitPaneLayout(entry.pane))) {
+      return []
+    }
+
+    const columns = Array.from(new Set(positioned.map((entry) => entry.column))).sort((left, right) => left - right)
+
+    return columns.map((column) => (
+      positioned
+        .filter((entry) => entry.column === column)
+        .sort((left, right) => (left.row - right.row) || (left.originalIndex - right.originalIndex))
+    ))
+  }, [terminalPanes, viewMode])
+  const hasCustomGridLayout = customGridColumns.length > 0
   const splitDirection = activeWorkspace?.splitDirection ?? 'vertical'
   const gridCols = viewMode === 'focus' ? 1
     : viewMode === 'split' ? (splitDirection === 'horizontal' ? 1 : 2)
@@ -2813,7 +2955,27 @@ export function TerminalView() {
   const totalCmds = terminalPanes.reduce((s, p) => s + p.commands.length, 0)
 
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden">
+    <div
+      className="h-full w-full flex flex-col overflow-hidden relative"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {isDragOver && (
+        <div className="absolute inset-0 z-[60] flex items-center justify-center pointer-events-none" style={{ background: 'rgba(3,5,10,0.82)', backdropFilter: 'blur(8px)' }}>
+          <div className="flex flex-col items-center gap-4 animate-fade-in">
+            <div className="flex h-20 w-20 items-center justify-center rounded-[28px]" style={{ background: 'linear-gradient(135deg, var(--accent), var(--secondary))', boxShadow: '0 20px 60px var(--accent-glow)' }}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#04111d" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </div>
+            <div className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>Drop files here</div>
+            <div className="text-[12px] max-w-xs text-center leading-5" style={{ color: 'var(--text-secondary)' }}>
+              Files and folders will be inserted as shell-escaped paths. Images will render inline via iTerm2 protocol.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Zen mode overlay hint ── */}
       {zenMode && (
         <div className="fixed top-2 right-2 z-50 opacity-0 hover:opacity-100 transition-opacity duration-300">
@@ -2824,7 +2986,7 @@ export function TerminalView() {
       )}
 
       {/* ── Top toolbar ── */}
-      {!zenMode && <div className={`shrink-0 flex items-center justify-between gap-3 ${compactToolbar ? 'px-3 py-2' : 'px-4 py-3'}`} style={{ borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, rgba(7,12,20,0.84), rgba(4,8,14,0.72))' }}>
+      {!zenMode && <div className={`shrink-0 flex items-center justify-between gap-3 liquid-glass-heavy ${compactToolbar ? 'px-3 py-2' : 'px-4 py-3'}`} style={{ borderBottom: '1px solid var(--border)', borderRadius: 0 }}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex items-center gap-2">
             <Terminal size={15} style={{ color: 'var(--accent)' }} />
@@ -2897,6 +3059,27 @@ export function TerminalView() {
               <Zap size={9} /> {broadcastMode ? 'BROADCAST ON' : compactToolbar ? 'Broadcast' : 'Broadcast'}
             </button>
           )}
+
+          <div className="flex items-center gap-0.5 p-0.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <button
+              onClick={() => splitFromPane(activePane, 'vertical')}
+              disabled={!activePane}
+              className="p-1.5 rounded-lg transition-all disabled:opacity-40"
+              title="Split Right (Ctrl+D)"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              <Columns2 size={12} />
+            </button>
+            <button
+              onClick={() => splitFromPane(activePane, 'horizontal')}
+              disabled={!activePane}
+              className="p-1.5 rounded-lg transition-all disabled:opacity-40"
+              title="Split Down (Ctrl+Shift+D)"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              <Columns2 size={12} style={{ transform: 'rotate(90deg)' }} />
+            </button>
+          </div>
 
           {/* View mode toggles */}
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
@@ -2999,11 +3182,11 @@ export function TerminalView() {
         {/* ── Sidebar (pane list) ── */}
         {!zenMode && showPaneSidebar && (
           <div
-            className="shrink-0 flex flex-col overflow-hidden transition-all duration-200"
+            className="shrink-0 flex flex-col overflow-hidden transition-all duration-200 liquid-glass"
             style={{
               width: '170px',
               borderRight: '1px solid var(--border)',
-              background: 'rgba(0,0,0,0.12)',
+              borderRadius: 0,
             }}
           >
             <div className="px-3 py-2 shrink-0">
@@ -3058,39 +3241,77 @@ export function TerminalView() {
 
         {/* ── Terminal grid/focus area ── */}
         <div className={`flex-1 overflow-hidden min-w-0 ${compactPaneMode ? 'p-1' : 'p-1.5'}`}>
-          <div className={`h-full grid ${compactPaneMode ? 'gap-1' : 'gap-1.5'}`} style={{
-            gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
-            gridTemplateRows: `repeat(${gridRows}, minmax(0, 1fr))`,
-          }}>
-            {terminalPanes.map((pane, idx) => {
-              const isVisible = visiblePanes.includes(pane)
-              return (
-                <div key={pane.id} style={{ display: isVisible ? 'flex' : 'none', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
-                  <TerminalPaneUI
-                    pane={pane}
-                    paneIndex={idx}
-                    isOnly={terminalPanes.length === 1}
-                    onActivate={() => activatePane(pane.id)}
-                    onMaximize={() => {
-                      if (viewMode === 'focus' && activePaneId === pane.id) {
-                        setViewMode(terminalPanes.length <= 2 ? 'split' : 'quad')
-                      } else {
-                        activatePane(pane.id)
-                        setViewMode('focus')
-                      }
-                    }}
-                    isMaximized={viewMode === 'focus' && activePaneId === pane.id && terminalPanes.length > 1}
-                    isFocused={activePaneId === pane.id}
-                    broadcastPanes={broadcastMode ? terminalPanes : undefined}
-                    shellName={shellName}
-                    osName={osName}
-                    capabilities={capabilities}
-                    compactMode={compactPaneMode}
-                  />
+          {hasCustomGridLayout ? (
+            <div className={`h-full flex ${compactPaneMode ? 'gap-1' : 'gap-1.5'}`}>
+              {customGridColumns.map((column, columnIndex) => (
+                <div key={`layout-column-${columnIndex}`} className={`flex min-w-0 flex-1 flex-col ${compactPaneMode ? 'gap-1' : 'gap-1.5'}`}>
+                  {column.map(({ pane, originalIndex }) => (
+                    <div key={pane.id} style={{ display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
+                      <TerminalPaneUI
+                        pane={pane}
+                        paneIndex={originalIndex}
+                        isOnly={terminalPanes.length === 1}
+                        onActivate={() => activatePane(pane.id)}
+                        onSplitRight={() => splitFromPane(pane, 'vertical')}
+                        onSplitDown={() => splitFromPane(pane, 'horizontal')}
+                        onMaximize={() => {
+                          if (viewMode === 'focus' && activePaneId === pane.id) {
+                            setViewMode(terminalPanes.length <= 2 ? 'split' : 'quad')
+                          } else {
+                            activatePane(pane.id)
+                            setViewMode('focus')
+                          }
+                        }}
+                        isMaximized={viewMode === 'focus' && activePaneId === pane.id && terminalPanes.length > 1}
+                        isFocused={activePaneId === pane.id}
+                        broadcastPanes={broadcastMode ? terminalPanes : undefined}
+                        shellName={shellName}
+                        osName={osName}
+                        capabilities={capabilities}
+                        compactMode={compactPaneMode}
+                      />
+                    </div>
+                  ))}
                 </div>
-              )
-            })}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className={`h-full grid ${compactPaneMode ? 'gap-1' : 'gap-1.5'}`} style={{
+              gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
+              gridTemplateRows: `repeat(${gridRows}, minmax(0, 1fr))`,
+            }}>
+              {terminalPanes.map((pane, idx) => {
+                const isVisible = visiblePanes.includes(pane)
+                return (
+                  <div key={pane.id} style={{ display: isVisible ? 'flex' : 'none', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
+                    <TerminalPaneUI
+                      pane={pane}
+                      paneIndex={idx}
+                      isOnly={terminalPanes.length === 1}
+                      onActivate={() => activatePane(pane.id)}
+                      onSplitRight={() => splitFromPane(pane, 'vertical')}
+                      onSplitDown={() => splitFromPane(pane, 'horizontal')}
+                      onMaximize={() => {
+                        if (viewMode === 'focus' && activePaneId === pane.id) {
+                          setViewMode(terminalPanes.length <= 2 ? 'split' : 'quad')
+                        } else {
+                          activatePane(pane.id)
+                          setViewMode('focus')
+                        }
+                      }}
+                      isMaximized={viewMode === 'focus' && activePaneId === pane.id && terminalPanes.length > 1}
+                      isFocused={activePaneId === pane.id}
+                      broadcastPanes={broadcastMode ? terminalPanes : undefined}
+                      shellName={shellName}
+                      osName={osName}
+                      capabilities={capabilities}
+                      compactMode={compactPaneMode}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

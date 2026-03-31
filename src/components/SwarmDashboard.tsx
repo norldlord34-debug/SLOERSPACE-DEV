@@ -1,12 +1,13 @@
 'use client'
 
 import Image from 'next/image'
+import { CliLogo } from '@/components/CliLogo'
 import { useStore } from '@/store/useStore'
 import type { AgentRole, SwarmAgent, SwarmMessage, SwarmSession, TerminalPane } from '@/store/useStore'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
-  StopCircle, Activity, Bot, FolderOpen,
+  StopCircle, Activity, Bot,
   Layers3, Workflow, ArrowRight, ArrowLeft, Terminal,
   Minus, Plus, Move, Send, AlertTriangle, UserPlus,
   BookOpen, CheckCircle2, Crown, Hammer, MessageSquareText, Search, ShieldCheck, Sparkles,
@@ -294,7 +295,39 @@ export function SwarmDashboard() {
     () => workspaceTabs.find((t) => t.id === activeTabId) ?? null,
     [workspaceTabs, activeTabId]
   )
+  const aiNotificationsEnabled = useStore((s) => s.aiSettings.notificationsEnabled)
   const swarmActive = swarmSession?.status === 'active'
+  const prevAgentStatusRef = useRef<Map<string, string>>(new Map())
+
+  // Sprint 1.1: Desktop notifications for agent status changes
+  useEffect(() => {
+    if (!aiNotificationsEnabled || !swarmSession) return
+    const agents = swarmSession.agents
+    const prevMap = prevAgentStatusRef.current
+
+    for (const agent of agents) {
+      const prev = prevMap.get(agent.id)
+      if (prev && prev !== agent.status) {
+        if (agent.status === 'complete') {
+          void import('@/lib/desktop').then(({ sendDesktopNotification }) =>
+            sendDesktopNotification('Agent Complete', `${agent.name} (${agent.role}) finished successfully.`))
+        } else if (agent.status === 'error') {
+          void import('@/lib/desktop').then(({ sendDesktopNotification }) =>
+            sendDesktopNotification('Agent Error', `${agent.name} (${agent.role}) encountered an error.`))
+        }
+      }
+      prevMap.set(agent.id, agent.status)
+    }
+
+    // Notify when entire swarm completes
+    if (swarmSession.status === 'complete' && agents.length > 0 && agents.every((a) => a.status === 'complete' || a.status === 'error')) {
+      const errors = agents.filter((a) => a.status === 'error').length
+      const msg = errors > 0 ? `${agents.length} agents done, ${errors} with errors.` : `All ${agents.length} agents completed successfully.`
+      void import('@/lib/desktop').then(({ sendDesktopNotification }) =>
+        sendDesktopNotification('Swarm Complete', msg))
+    }
+  }, [aiNotificationsEnabled, swarmSession])
+
   const [elapsed, setElapsed] = useState(0)
   const [zoom, setZoom] = useState(DEFAULT_CANVAS_ZOOM)
   const [nowMs, setNowMs] = useState(Date.now())
@@ -359,41 +392,6 @@ export function SwarmDashboard() {
       }))
       .filter((connection) => connection.from && connection.to && connection.from.agent.id !== connection.to.agent.id)
   }, [graphLayout])
-  const activityItems = useMemo(() => {
-    const scopedMessages = roleFilter === 'all' && statusFilter === 'all'
-      ? sessionMessages
-      : sessionMessages.filter((message) => (
-        message.senderRole === 'operator'
-        || message.senderRole === 'system'
-        || visibleAgentIdSet.has(message.senderId)
-        || visibleAgentIdSet.has(message.target)
-      ))
-    const messageItems = scopedMessages.map((message) => ({
-      id: message.id,
-      label: message.senderName,
-      meta: message.senderRole,
-      detail: message.content,
-      createdAt: message.createdAt,
-    }))
-    const agentItems = visibleAgents.map((agent) => ({
-      id: `agent-${agent.id}`,
-      label: agent.name,
-      meta: agent.role,
-      detail: agent.task || 'Booting CLI session',
-      createdAt: agent.startedAt,
-    }))
-    const runtimeItems = visibleTerminalPanes.map((pane) => ({
-      id: `runtime-${pane.id}`,
-      label: pane.label || pane.cwd.split(/[\\/]/).filter(Boolean).pop() || 'Terminal lane',
-      meta: 'system' as const,
-      detail: `${pane.runtimeSession?.backendKind ?? 'runtime-pending'} · ${getPaneCommandPreview(pane)}`,
-      createdAt: new Date(pane.runtimeSession?.updatedAtMs ?? Date.now()).toISOString(),
-    }))
-
-    return [...messageItems, ...agentItems, ...runtimeItems]
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 24)
-  }, [sessionMessages, visibleAgents, visibleAgentIdSet, visibleTerminalPanes, roleFilter, statusFilter])
   const briefingSections = useMemo(
     () => (swarmSession ? buildBriefingSections(swarmSession, sessionAgents, sessionMessages, terminalPanes) : []),
     [sessionMessages, sessionAgents, swarmSession, terminalPanes],
@@ -575,21 +573,29 @@ export function SwarmDashboard() {
 
   if (!swarmSession) {
     return (
-      <div className="h-full p-6 flex items-center justify-center">
-        <div className="premium-panel-elevated mesh-overlay max-w-xl w-full p-8 text-center">
-          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[24px] bg-[linear-gradient(135deg,var(--warning),var(--error))] text-[#160904] shadow-[0_20px_50px_rgba(255,191,98,0.22)]">
-            <Workflow size={24} />
+      <div className="relative h-full flex items-center justify-center overflow-hidden bg-black">
+        <div className="absolute inset-0">
+          <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-black to-slate-900" />
+          <div className="absolute top-20 left-20 w-80 h-80 bg-amber-500/10 rounded-full blur-3xl animate-pulse" />
+          <div className="absolute bottom-20 right-20 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+        </div>
+        <div className="relative z-10 max-w-xl w-full p-10 text-center rounded-3xl border border-white/10" style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(20px)' }}>
+          <div className="relative inline-block mb-6">
+            <div className="absolute inset-0 bg-gradient-to-r from-amber-500 to-orange-400 rounded-2xl blur-xl opacity-40" />
+            <div className="relative h-16 w-16 rounded-2xl border border-white/20 flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.08)' }}>
+              <Workflow size={24} className="text-white" />
+            </div>
           </div>
-          <div className="text-[10px] font-bold uppercase tracking-[0.24em] mb-3" style={{ color: 'var(--text-muted)' }}>
+          <div className="text-xs font-mono uppercase tracking-wider mb-3 text-white/40">
             SloerSwarm Mission Control
           </div>
-          <div className="text-2xl font-bold mb-3" style={{ color: 'var(--text-primary)', fontFamily: "'Space Grotesk', sans-serif" }}>
-            No active SloerSwarm session
+          <div className="text-3xl font-bold text-white mb-4" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+            No active session
           </div>
-          <p className="text-[13px] leading-7 mb-5 max-w-lg mx-auto" style={{ color: 'var(--text-secondary)' }}>
-            Launch a new mission to inspect objective context, live agent coordination and execution telemetry from a premium command dashboard.
+          <p className="text-sm text-white/60 mb-8 max-w-md mx-auto leading-relaxed">
+            Launch a new mission to coordinate AI agents in parallel with live telemetry and operator control.
           </p>
-          <button onClick={() => setView('swarm-launch')} className="btn-primary text-[12px] inline-flex items-center gap-2">
+          <button onClick={() => setView('swarm-launch')} className="inline-flex items-center gap-2 rounded-2xl px-8 py-3 text-sm font-bold transition-all duration-500 hover:scale-105" style={{ background: 'linear-gradient(135deg, #4f8cff, #28e7c5)', color: '#04111d', boxShadow: '0 12px 40px rgba(79,140,255,0.3)' }}>
             <ArrowRight size={14} /> New Swarm
           </button>
         </div>
@@ -601,7 +607,6 @@ export function SwarmDashboard() {
   const agents = visibleAgents
   const messages = sessionMessages
   const done = agents.filter(a => a.status === 'complete').length
-  const working = agents.filter(a => a.status === 'running').length
   const coordinators = agents.filter((agent) => agent.role === 'coord')
   const executionAgents = agents.filter((agent) => agent.role !== 'coord')
   const alerts = agents.filter((agent) => agent.status === 'error').length
@@ -609,7 +614,6 @@ export function SwarmDashboard() {
   const terminalCount = terminalPanes.length
   const visibleTerminalCount = visibleTerminalPanes.length
   const linkedRuntimeCount = visibleTerminalPanes.filter((pane) => pane.runtimeSession).length
-  const runningRuntimeCount = visibleTerminalPanes.filter((pane) => pane.runtimeSession?.isRunning || pane.isRunning).length
   const runtimeFailures = visibleTerminalPanes.filter((pane) => {
     const exitCode = pane.runtimeSession?.lastExitCode
     return typeof exitCode === 'number' && exitCode !== 0
@@ -622,12 +626,6 @@ export function SwarmDashboard() {
   const forOperator = filteredMessages.filter((message) => message.target === 'operator' || message.kind === 'alert').length
   const filterLabel = roleFilter === 'all' ? 'All lanes' : ROLE_META[roleFilter].label
   const statusFilterLabel = STATUS_FILTERS.find((filter) => filter.id === statusFilter)?.label ?? 'All status'
-  const coordinationLabel = coordinators.length > 0
-    ? `${coordinators.length} coord · ${Math.max(0, executionAgents.length)} execution`
-    : `${executionAgents.length} execution`
-  const knowledgeLabel = swarmSession.knowledgeFiles.length > 0
-    ? `${swarmSession.knowledgeFiles.length} linked files`
-    : 'No linked files'
   const directivesLabel = swarmSession.missionDirectives.length > 0
     ? `${swarmSession.missionDirectives.length} directives`
     : 'No directives'
@@ -679,10 +677,17 @@ export function SwarmDashboard() {
   }
 
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden swarm-shell">
+    <div className="relative h-full w-full flex flex-col overflow-hidden bg-black">
+      {/* 3D Background */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-black to-slate-900" />
+        <div className="absolute top-10 right-20 w-72 h-72 bg-blue-500/6 rounded-full blur-3xl" />
+        <div className="absolute bottom-10 left-10 w-72 h-72 bg-amber-500/6 rounded-full blur-3xl" />
+      </div>
+
       {/* ── Breadcrumb header bar ── */}
-      <div className="shrink-0 px-4 pt-3 pb-2 swarm-content">
-        <div className="flex items-center justify-between rounded-[24px] border px-4 py-2.5" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.64)', backdropFilter: 'blur(22px) saturate(1.16)' }}>
+      <div className="relative z-10 shrink-0 px-4 pt-3 pb-2">
+        <div className="flex items-center justify-between rounded-2xl border border-white/10 px-4 py-2.5" style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(20px)' }}>
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => setView('swarm-launch')}
@@ -752,7 +757,7 @@ export function SwarmDashboard() {
       </div>
 
       {/* ── MISSION label ── */}
-      <div className="shrink-0 px-4 pb-3 swarm-content">
+      <div className="relative z-10 shrink-0 px-4 pb-3">
         <div className="flex items-center justify-between gap-3 rounded-[22px] border px-4 py-2.5" style={{ borderColor: 'rgba(170,221,255,0.06)', background: 'rgba(4,8,14,0.5)', backdropFilter: 'blur(18px) saturate(1.15)' }}>
           <div className="min-w-0 flex items-center gap-2 overflow-hidden">
             <span className="text-[8px] font-bold uppercase tracking-[0.2em] px-1.5 py-0.5 rounded" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>Mission</span>
@@ -809,118 +814,55 @@ export function SwarmDashboard() {
         </div>
       </div>
 
-      <div className="shrink-0 px-4 pb-3 swarm-content">
-        <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]">
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.48)', backdropFilter: 'blur(18px) saturate(1.1)' }}>
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission coverage</div>
-              <div className="mt-2 text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>{visibleCoverage}</div>
-              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>{coordinationLabel}</div>
-            </div>
-            <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.48)', backdropFilter: 'blur(18px) saturate(1.1)' }}>
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Mission envelope</div>
-              <div className="mt-2 text-[16px] font-semibold" style={{ color: swarmSession.knowledgeFiles.length > 0 || swarmSession.contextNotes.trim() || swarmSession.missionDirectives.length > 0 ? 'var(--success)' : 'var(--text-primary)' }}>{directivesLabel}</div>
-              <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                {knowledgeLabel} · {swarmSession.contextNotes.trim() ? 'notes attached' : 'no notes'}
-              </div>
-            </div>
-            <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(6,10,18,0.48)', backdropFilter: 'blur(18px) saturate(1.1)' }}>
-              <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Runtime surface</div>
-              <div className="mt-2 text-[16px] font-semibold" style={{ color: runtimeFailures > 0 ? 'var(--error)' : runningRuntimeCount > 0 ? 'var(--accent)' : linkedRuntimeCount > 0 ? 'var(--success)' : 'var(--warning)' }}>{runtimeLinkLabel}</div>
-              <div className="mt-1 text-[10px] line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{runningRuntimeCount} live · {runtimeFailures} failures · {backendLabel}</div>
-            </div>
+      {/* Compact filters bar */}
+      <div className="relative z-10 shrink-0 px-4 pb-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Lane filter pills */}
+          <div className="flex items-center gap-1">
+            <span className="text-[8px] font-bold uppercase tracking-wider mr-1" style={{ color: 'var(--text-muted)' }}>Lane</span>
+            <button onClick={() => setRoleFilter('all')}
+              className="rounded-full border px-2.5 py-1 text-[9px] font-semibold transition-all"
+              style={{ borderColor: roleFilter === 'all' ? 'rgba(79,140,255,0.3)' : 'rgba(255,255,255,0.06)', background: roleFilter === 'all' ? 'rgba(79,140,255,0.12)' : 'transparent', color: roleFilter === 'all' ? 'var(--accent)' : 'var(--text-muted)' }}>
+              All
+            </button>
+            {(['coord', 'builder', 'reviewer', 'scout', 'custom'] as AgentRole[]).map((role) => (
+              <button key={role} onClick={() => setRoleFilter(role)}
+                className="rounded-full border px-2.5 py-1 text-[9px] font-semibold transition-all"
+                style={{ borderColor: roleFilter === role ? `${ROLE_META[role].color}44` : 'rgba(255,255,255,0.06)', background: roleFilter === role ? `${ROLE_META[role].color}14` : 'transparent', color: roleFilter === role ? ROLE_META[role].color : 'var(--text-muted)' }}>
+                {ROLE_META[role].label}
+              </button>
+            ))}
           </div>
 
-          <div className="rounded-[22px] border px-4 py-4" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(4,8,14,0.5)', backdropFilter: 'blur(18px) saturate(1.15)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Lane filter</div>
-                <div className="mt-1 text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>Focus the mission on a single role lane without losing session state.</div>
-              </div>
-              {roleFilter !== 'all' && (
-                <span className="rounded-full px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em]" style={{ background: `${ROLE_META[roleFilter].color}18`, color: ROLE_META[roleFilter].color }}>
-                  filtered
-                </span>
-              )}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                onClick={() => setRoleFilter('all')}
-                className="rounded-full border px-3 py-1.5 text-[10px] font-semibold transition-all"
-                style={{
-                  borderColor: roleFilter === 'all' ? 'rgba(79,140,255,0.28)' : 'rgba(255,255,255,0.08)',
-                  background: roleFilter === 'all' ? 'rgba(79,140,255,0.12)' : 'rgba(6,10,18,0.36)',
-                  color: roleFilter === 'all' ? 'var(--accent)' : 'var(--text-secondary)',
-                }}
-              >
-                All lanes
-              </button>
-              {(['coord', 'builder', 'reviewer', 'scout', 'custom'] as AgentRole[]).map((role) => (
-                <button
-                  key={role}
-                  onClick={() => setRoleFilter(role)}
-                  className="rounded-full border px-3 py-1.5 text-[10px] font-semibold transition-all"
-                  style={{
-                    borderColor: roleFilter === role ? `${ROLE_META[role].color}66` : 'rgba(255,255,255,0.08)',
-                    background: roleFilter === role ? `${ROLE_META[role].color}18` : 'rgba(6,10,18,0.36)',
-                    color: roleFilter === role ? ROLE_META[role].color : 'var(--text-secondary)',
-                  }}
-                >
-                  {ROLE_META[role].label}
-                </button>
-              ))}
-            </div>
+          <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.08)' }} />
 
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Status filter</div>
-                <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{statusFilterLabel} in view</div>
-              </div>
-              {statusFilter !== 'all' && (
-                <button
-                  onClick={() => setStatusFilter('all')}
-                  className="rounded-full border px-2.5 py-1 text-[8px] font-bold uppercase tracking-[0.14em] transition-all"
-                  style={{ borderColor: 'rgba(170,221,255,0.12)', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)' }}
-                >
-                  Clear
+          {/* Status filter pills */}
+          <div className="flex items-center gap-1">
+            <span className="text-[8px] font-bold uppercase tracking-wider mr-1" style={{ color: 'var(--text-muted)' }}>Status</span>
+            {STATUS_FILTERS.map((filter) => {
+              const active = statusFilter === filter.id
+              const tone = filter.id === 'error' ? 'var(--error)' : filter.id === 'complete' ? 'var(--success)' : filter.id === 'running' ? 'var(--accent)' : filter.id === 'idle' ? 'var(--warning)' : 'var(--text-secondary)'
+              return (
+                <button key={filter.id} onClick={() => setStatusFilter(filter.id)}
+                  className="rounded-full border px-2.5 py-1 text-[9px] font-semibold transition-all"
+                  style={{ borderColor: active ? withAlpha(tone, 0.3) : 'rgba(255,255,255,0.06)', background: active ? withAlpha(tone, 0.14) : 'transparent', color: active ? tone : 'var(--text-muted)' }}>
+                  {filter.label}
                 </button>
-              )}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {STATUS_FILTERS.map((filter) => {
-                const active = statusFilter === filter.id
-                const tone = filter.id === 'error'
-                  ? 'var(--error)'
-                  : filter.id === 'complete'
-                    ? 'var(--success)'
-                    : filter.id === 'running'
-                      ? 'var(--accent)'
-                      : filter.id === 'idle'
-                        ? 'var(--warning)'
-                        : 'var(--text-secondary)'
+              )
+            })}
+          </div>
 
-                return (
-                  <button
-                    key={filter.id}
-                    onClick={() => setStatusFilter(filter.id)}
-                    className="rounded-full border px-3 py-1.5 text-[10px] font-semibold transition-all"
-                    style={{
-                      borderColor: active ? withAlpha(tone, 0.38) : 'rgba(255,255,255,0.08)',
-                      background: active ? withAlpha(tone, 0.18) : 'rgba(6,10,18,0.36)',
-                      color: active ? tone : 'var(--text-secondary)',
-                    }}
-                  >
-                    {filter.label}
-                  </button>
-                )
-              })}
-            </div>
+          {/* Compact stats */}
+          <div className="ml-auto flex items-center gap-3 text-[9px] font-mono" style={{ color: 'var(--text-muted)' }}>
+            <span>{visibleCoverage}</span>
+            <span>·</span>
+            <span style={{ color: runtimeFailures > 0 ? 'var(--error)' : 'var(--text-muted)' }}>{runtimeLinkLabel}</span>
           </div>
         </div>
       </div>
 
       {/* ── Main content ── */}
-      <div className="flex-1 flex overflow-hidden min-h-0 swarm-content">
+      <div className="relative z-10 flex-1 flex overflow-hidden min-h-0">
         {/* ── Left: Canvas area ── */}
         <div className="flex-1 overflow-hidden min-w-0 relative">
           {/* Zoom controls */}
@@ -954,7 +896,7 @@ export function SwarmDashboard() {
               onDoubleClick={() => resetCanvasView()}
               style={{ cursor: isCanvasDragging ? 'grabbing' : 'grab' }}
             >
-              <div className="mx-auto min-w-[1080px]" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}>
+              <div className="mx-auto min-w-[700px]" style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}>
                 {/* Control Layer */}
                 <div className="mt-2 rounded-2xl border p-5 swarm-hover-lift" style={{ borderColor: 'rgba(163,209,255,0.12)', background: 'linear-gradient(180deg,rgba(6,11,19,0.96),rgba(4,8,14,0.98))' }}>
                   <div className="mb-4 flex items-center justify-between">
@@ -1085,14 +1027,32 @@ export function SwarmDashboard() {
                                   </span>
                                   <span className="ml-auto font-mono" style={{ color: 'var(--text-muted)' }}>{formatAgentRuntime(node.agent, nowMs)}</span>
                                 </div>
-                                <div className="mt-2 text-[9px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>
-                                  {node.agent.cli} · {nodePane?.runtimeSession?.backendKind ?? 'pending backend'}
+                                <div className="mt-2 flex items-center gap-1.5 text-[9px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>
+                                  <CliLogo cli={node.agent.cli} size={12} /> {node.agent.cli} · {nodePane?.runtimeSession?.backendKind ?? 'pending backend'}
                                 </div>
                                 <div className="mt-1 text-[9px] leading-5 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
                                   {node.agent.task || 'Booting CLI session'}
                                 </div>
                                 <div className="mt-2 text-[8px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>
                                   {getPaneCommandPreview(nodePane)}
+                                </div>
+                                <div className="mt-3 flex items-center gap-2">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); openTerminalView(undefined, node.agent.id) }}
+                                    className="flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2 text-[9px] font-bold uppercase tracking-wider transition-all hover:scale-[1.02]"
+                                    style={{ background: 'rgba(79,140,255,0.15)', color: 'var(--accent)', border: '1px solid rgba(79,140,255,0.2)' }}
+                                  >
+                                    <Terminal size={11} /> Terminal
+                                  </button>
+                                  {swarmActive && (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); stopSwarm() }}
+                                      className="flex h-8 w-8 items-center justify-center rounded-xl transition-all hover:scale-110"
+                                      style={{ background: 'rgba(255,71,87,0.15)', color: 'var(--error)', border: '1px solid rgba(255,71,87,0.2)' }}
+                                    >
+                                      <StopCircle size={12} />
+                                    </button>
+                                  )}
                                 </div>
                               </button>
                             )
@@ -1152,7 +1112,7 @@ export function SwarmDashboard() {
                             <div>
                               <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded" style={{ background: withAlpha(roleMeta.color, 0.2), color: roleMeta.color }}>{roleMeta.label}</span>
                               <div className="mt-1 text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>{agent.name}</div>
-                              <div className="text-[8px] uppercase" style={{ color: 'var(--text-muted)' }}>{agent.cli}</div>
+                              <div className="flex items-center gap-1 text-[8px] uppercase" style={{ color: 'var(--text-muted)' }}><CliLogo cli={agent.cli} size={10} /> {agent.cli}</div>
                             </div>
                             <span className="text-[9px] font-mono" style={{ color: 'var(--text-muted)' }}>{formatAgentRuntime(agent, nowMs)}</span>
                           </div>
@@ -1233,11 +1193,11 @@ export function SwarmDashboard() {
                       <button
                         key={agent.id}
                         onClick={() => focusAgent(agent.id)}
-                        className="w-full rounded-xl px-3 py-3 text-left transition-all swarm-hover-lift"
+                        className={`w-full rounded-xl px-3 py-3 text-left transition-all hover-lift-3d liquid-glass ${agent.status === 'running' ? 'status-live' : ''}`}
                         style={{
-                          background: focusedAgentId === agent.id ? 'rgba(79,140,255,0.12)' : 'transparent',
+                          background: focusedAgentId === agent.id ? 'rgba(79,140,255,0.12)' : undefined,
                           border: focusedAgentId === agent.id ? '1px solid rgba(79,140,255,0.22)' : '1px solid transparent',
-                          boxShadow: focusedAgentId === agent.id ? `0 16px 40px ${withAlpha(roleMeta.color, 0.12)}` : 'none',
+                          boxShadow: focusedAgentId === agent.id ? `0 16px 40px ${withAlpha(roleMeta.color, 0.12)}` : undefined,
                         }}
                       >
                         <div className="flex items-center gap-2">
@@ -1262,7 +1222,7 @@ export function SwarmDashboard() {
               </div>
 
               <div className="flex flex-col overflow-hidden">
-                <div className="shrink-0 px-5 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)', background: 'rgba(6,10,18,0.48)', backdropFilter: 'blur(16px) saturate(1.12)' }}>
+                <div className="shrink-0 px-5 py-3 flex items-center justify-between liquid-glass-heavy" style={{ borderBottom: '1px solid var(--border)', borderRadius: 0 }}>
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-primary)' }}>Console</div>
                     <div className="mt-1 text-[11px] flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
@@ -1373,155 +1333,70 @@ export function SwarmDashboard() {
           )}
         </div>
 
-        {/* ── Right: Operator panel ── */}
-        <div className="shrink-0 w-[320px] flex flex-col overflow-hidden" style={{ borderLeft: '1px solid var(--border)', background: 'rgba(0,0,0,0.08)', backdropFilter: 'blur(16px) saturate(1.08)' }}>
-          {/* Operator View */}
-          <div className="shrink-0 px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'rgba(7,12,20,0.42)' }}>
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <div className="flex items-center gap-2">
-                <Activity size={13} style={{ color: 'var(--warning)' }} />
-                <span className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-primary)' }}>Operator View</span>
-              </div>
-              <span className="rounded-full px-2 py-1 text-[8px] font-bold uppercase tracking-[0.14em]" style={{ background: withAlpha(missionHealthTone, 0.18), color: missionHealthTone }}>
-                {swarmActive ? 'live mission' : 'preserved'}
+        {/* ── Right: Compact Operator Sidebar ── */}
+        <div className="shrink-0 w-[260px] flex flex-col overflow-hidden" style={{ borderLeft: '1px solid var(--border)', background: 'rgba(0,0,0,0.06)' }}>
+          {/* Compact stats row */}
+          <div className="shrink-0 px-3 py-2" style={{ borderBottom: '1px solid var(--border)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Operator</span>
+              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded" style={{ background: withAlpha(missionHealthTone, 0.15), color: missionHealthTone }}>
+                {swarmActive ? 'live' : 'done'}
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-xl border px-3 py-3" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
-                <div className="text-[8px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Escalations</div>
-                <div className="mt-1 text-[12px] font-semibold" style={{ color: alerts > 0 ? 'var(--error)' : 'var(--text-primary)' }}>{alerts}</div>
+            <div className="grid grid-cols-4 gap-1.5">
+              <div className="text-center rounded-lg py-1.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[7px] font-bold uppercase text-white/30">Esc</div>
+                <div className="text-sm font-bold" style={{ color: alerts > 0 ? 'var(--error)' : 'var(--text-primary)' }}>{alerts}</div>
               </div>
-              <div className="rounded-xl border px-3 py-3" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
-                <div className="text-[8px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>For operator</div>
-                <div className="mt-1 text-[12px] font-semibold" style={{ color: 'var(--accent)' }}>{forOperator}</div>
+              <div className="text-center rounded-lg py-1.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[7px] font-bold uppercase text-white/30">Op</div>
+                <div className="text-sm font-bold" style={{ color: 'var(--accent)' }}>{forOperator}</div>
               </div>
-              <div className="rounded-xl border px-3 py-3" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
-                <div className="text-[8px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Review ready</div>
-                <div className="mt-1 text-[12px] font-semibold" style={{ color: 'var(--secondary)' }}>{readyForReview}</div>
+              <div className="text-center rounded-lg py-1.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[7px] font-bold uppercase text-white/30">Rev</div>
+                <div className="text-sm font-bold" style={{ color: 'var(--secondary)' }}>{readyForReview}</div>
               </div>
-              <div className="rounded-xl border px-3 py-3" style={{ borderColor: 'rgba(170,221,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
-                <div className="text-[8px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Quiet</div>
-                <div className="mt-1 text-[12px] font-semibold" style={{ color: 'var(--warning)' }}>{sessionQuiet}</div>
+              <div className="text-center rounded-lg py-1.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[7px] font-bold uppercase text-white/30">Qt</div>
+                <div className="text-sm font-bold" style={{ color: 'var(--warning)' }}>{sessionQuiet}</div>
               </div>
-            </div>
-            <div className="mt-3 flex gap-1.5">
-              <span className="text-[9px] font-bold px-2 py-1 rounded-md" style={{ background: 'rgba(255,255,255,0.04)', color: runtimeFailures > 0 ? 'var(--error)' : 'var(--text-muted)' }}>{runtimeLinkLabel}</span>
-              <span className="text-[9px] font-bold px-2 py-1 rounded-md truncate" style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)' }}>{backendLabel}</span>
             </div>
           </div>
 
-          {/* Operator Console */}
-          <div className="shrink-0 px-4 py-3 min-h-[260px]" style={{ borderBottom: '1px solid var(--border)', background: 'rgba(4,8,14,0.28)' }}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <FolderOpen size={12} style={{ color: 'var(--text-muted)' }} />
-                <span className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-primary)' }}>Operator Console</span>
-              </div>
-              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>{filteredMessages.length} msg</span>
+          {/* Console messages */}
+          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+            <div className="shrink-0 px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
+              <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Console</span>
+              <span className="text-[8px] font-mono" style={{ color: 'var(--text-muted)' }}>{filteredMessages.length} msg</span>
             </div>
-            <div className="max-h-[180px] overflow-y-auto pr-1">
+            <div className="flex-1 overflow-y-auto px-3 py-2 min-h-0">
               <ConversationFeed
                 messages={compactMessages}
-                emptyLabel="Send one below or wait for agents to communicate."
+                emptyLabel="Waiting for agent messages..."
                 compact
               />
             </div>
-            <div className="mt-3 text-[10px] leading-5" style={{ color: 'var(--text-muted)' }}>
-              {mode === 'console'
-                ? 'Expanded console is active in the main workspace. Use the left roster to focus an agent stream.'
-                : `Focused target: ${selectedTargetLabel} · ${selectedTargetMeta}. Use the floating composer to issue directives without breaking context.`}
-            </div>
           </div>
 
-          <div className="shrink-0 px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'rgba(7,12,20,0.3)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-primary)' }}>Mission envelope</div>
-                <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>{knowledgeLabel} · {directivesLabel}</div>
-              </div>
-              <button
-                onClick={() => openTerminalView(undefined, focusedAgent?.id ?? selectedTargetAgent?.id)}
-                className="rounded-lg px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.14em] transition-all"
-                style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}
-              >
-                Open terminal
-              </button>
-            </div>
-            {swarmSession.missionDirectives.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {swarmSession.missionDirectives.map((directive) => (
-                  <span key={directive} className="rounded-full px-2.5 py-1 text-[8px] font-bold uppercase tracking-[0.14em]" style={{ background: 'rgba(79,140,255,0.1)', color: 'var(--accent)' }}>
-                    {directive.replace(/-/g, ' ')}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="mt-3 rounded-lg border px-3 py-2.5" style={{ borderColor: 'rgba(170,221,255,0.06)', background: 'rgba(4,9,18,0.44)' }}>
-              <div className="text-[8px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator note</div>
-              <div className="mt-1 text-[10px] leading-5 line-clamp-4" style={{ color: 'var(--text-secondary)' }}>
-                {swarmSession.contextNotes.trim() || 'No operator-only note attached to this mission.'}
-              </div>
-            </div>
-            <div className="mt-3 flex gap-2">
-              <button
-                onClick={() => openTerminalView('pwd', focusedAgent?.id ?? selectedTargetAgent?.id)}
-                className="flex-1 rounded-lg px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.14em] transition-all"
-                style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' }}
-              >
-                Prime `pwd`
-              </button>
-              <button
-                onClick={() => openTerminalView('git status', focusedAgent?.id ?? selectedTargetAgent?.id)}
-                className="flex-1 rounded-lg px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.14em] transition-all"
-                style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' }}
-              >
-                Prime `git status`
-              </button>
-            </div>
-          </div>
-
-          {/* Live Activity */}
-          <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <Activity size={12} style={{ color: 'var(--warning)' }} />
-                <span className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-primary)' }}>Live Activity</span>
-              </div>
-              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'rgba(79,140,255,0.12)', color: 'var(--accent)' }}>{working} active</span>
-            </div>
-            <div className="space-y-1">
-              {activityItems.map((item) => {
-                const itemColor = item.meta === 'system'
-                  ? 'var(--warning)'
-                  : item.meta === 'operator'
-                    ? 'var(--accent)'
-                    : ROLE_META[item.meta as AgentRole]?.color ?? 'var(--text-muted)'
-                return (
-                  <div key={item.id} className="flex items-center gap-2.5 rounded-lg border p-2 transition-all hover:bg-[rgba(255,255,255,0.02)]" style={{ borderColor: 'rgba(170,221,255,0.05)', background: 'rgba(7,12,20,0.24)' }}>
-                    <div className="w-6 h-6 rounded flex items-center justify-center shrink-0" style={{ background: `${itemColor}15` }}>
-                      <Bot size={10} style={{ color: itemColor }} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-primary)' }}>{item.label}</span>
-                        <span className="text-[8px]" style={{ color: itemColor }}>· {typeof item.meta === 'string' ? item.meta : 'event'}</span>
-                      </div>
-                      <div className="text-[8px] font-mono mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>
-                        {item.detail}
-                      </div>
-                    </div>
-                    <div className="text-[8px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>{formatClock(item.createdAt)}</div>
-                  </div>
-                )
-              })}
-            </div>
+          {/* Quick actions */}
+          <div className="shrink-0 px-3 py-2 flex gap-1.5" style={{ borderTop: '1px solid var(--border)' }}>
+            <button onClick={() => openTerminalView(undefined, focusedAgent?.id ?? selectedTargetAgent?.id)}
+              className="flex-1 rounded-lg py-1.5 text-[8px] font-bold uppercase tracking-wider text-center transition-all"
+              style={{ background: 'rgba(79,140,255,0.1)', color: 'var(--accent)' }}>
+              Terminal
+            </button>
+            <button onClick={() => setMode('briefing')}
+              className="flex-1 rounded-lg py-1.5 text-[8px] font-bold uppercase tracking-wider text-center transition-all"
+              style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)' }}>
+              Briefing
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-14 right-4 z-20 swarm-content">
-        <div ref={composerRef} className="pointer-events-auto w-[min(420px,calc(100vw-2rem))] rounded-[26px] border p-3 shadow-[0_28px_90px_rgba(0,0,0,0.42)]"
-          style={{ borderColor: 'rgba(170,221,255,0.12)', background: 'linear-gradient(180deg, rgba(6,10,18,0.94), rgba(3,7,13,0.96))', backdropFilter: 'blur(30px) saturate(1.16)' }}>
+      <div className="relative z-20 shrink-0 px-4 pb-2">
+        <div ref={composerRef} className="rounded-2xl border p-2.5"
+          style={{ borderColor: 'rgba(170,221,255,0.1)', background: 'rgba(6,10,18,0.92)', backdropFilter: 'blur(20px)' }}>
           <div className="flex items-center justify-between gap-3 pb-2">
             <div>
               <div className="text-[9px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>Operator composer</div>
@@ -1623,7 +1498,7 @@ export function SwarmDashboard() {
       </div>
 
       {/* ── Bottom status bar ── */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-1.5" style={{ borderTop: '1px solid var(--border)', background: 'rgba(0,0,0,0.15)' }}>
+      <div className="relative z-10 shrink-0 flex items-center justify-between px-4 py-1.5" style={{ borderTop: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(16px)' }}>
         <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
           {agents.length} visible agents · {messages.length} messages · {swarmSession.knowledgeFiles.length} knowledge files · {directivesLabel} · {runtimeLinkLabel} · {filterLabel} · {statusFilterLabel}
         </span>

@@ -1,11 +1,13 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
+import { useState, useEffect } from 'react'
 import type { TerminalSessionSnapshot } from '@/lib/desktop'
 
 export type ThemeId =
   | 'sloerspace' | 'github-dark' | 'catppuccin-mocha' | 'rose-pine' | 'one-dark-pro'
   | 'nord' | 'dracula' | 'everforest-dark' | 'poimandres' | 'oled-dark' | 'neon-tech'
-  | 'synthwave' | 'catppuccin-latte' | 'github-light' | 'rose-pine-dawn'
+  | 'dark-contrast-puro' | 'synthwave' | 'catppuccin-latte' | 'github-light' | 'rose-pine-dawn'
+  | 'custom'
 
 export interface CustomThemePreset {
   id: string
@@ -27,14 +29,122 @@ export interface CustomThemePreset {
   description: string
 }
 
-export type ViewId = 'home' | 'terminal' | 'kanban' | 'agents' | 'prompts' | 'settings' | 'swarm-launch' | 'swarm-dashboard' | 'workspace-wizard' | 'login'
-export type WorkspaceViewId = Extract<ViewId, 'terminal' | 'swarm-dashboard'>
-export type WorkspaceKind = 'terminal' | 'swarm'
+export type ViewId = 'home' | 'terminal' | 'canvas' | 'kanban' | 'agents' | 'prompts' | 'settings' | 'swarm-launch' | 'swarm-dashboard' | 'workspace-wizard' | 'canvas-wizard' | 'login' | 'browser' | 'editor' | 'notebook' | 'ssh' | 'env' | 'preview' | 'sessions' | 'file-preview' | 'history' | 'codebase' | 'system' | 'ports' | 'snippets'
+export type WorkspaceViewId = Extract<ViewId, 'terminal' | 'canvas' | 'swarm-dashboard' | 'browser'>
+export type WorkspaceKind = 'terminal' | 'canvas' | 'swarm' | 'browser'
 export type TerminalSplitDirection = 'horizontal' | 'vertical'
 
-export type SettingsTab = 'appearance' | 'shortcuts' | 'ai-agents' | 'account' | 'api-keys' | 'data'
+export type SettingsTab = 'account' | 'appearance' | 'shortcuts' | 'ai-agents' | 'ai-settings' | 'siulk-voice' | 'notifications' | 'cli' | 'terminal' | 'api-keys' | 'data' | 'help'
 
-export type AgentCli = 'claude' | 'codex' | 'gemini' | 'opencode' | 'cursor'
+export interface NotificationSettings {
+  sounds: boolean
+  os: boolean
+}
+
+export type SiulkVoiceTranscriptionMode = 'local'
+export type SiulkVoiceRecordingMode = 'push-to-talk' | 'toggle'
+export type WhisperModel = 'tiny.en' | 'base.en' | 'large-v3'
+export type WhisperLanguage = 'en' | 'es' | 'fr' | 'de' | 'ja' | 'zh'
+
+export interface SiulkVoiceSettings {
+  enabled: boolean
+  transcriptionMode: SiulkVoiceTranscriptionMode
+  whisperModel: WhisperModel
+  whisperLanguage: WhisperLanguage
+  pushToTalkKey: string | null
+  toggleRecordingKey: string | null
+  selectedMicrophone: string | null
+  isRecording: boolean
+  isProcessing: boolean
+  lastTranscript: string | null
+}
+
+export interface TerminalSettings {
+  defaultShell: TerminalShellKind
+}
+
+export type AIProvider = 'openai' | 'anthropic' | 'google' | 'ollama'
+export type AIChatRole = 'user' | 'assistant' | 'system'
+
+export interface AISettings {
+  provider: AIProvider
+  openaiApiKey: string
+  anthropicApiKey: string
+  googleApiKey: string
+  ollamaEndpoint: string
+  ollamaModel: string
+  openaiModel: string
+  anthropicModel: string
+  googleModel: string
+  commandSuggestionsEnabled: boolean
+  notificationsEnabled: boolean
+}
+
+export interface AIChatMessage {
+  id: string
+  role: AIChatRole
+  content: string
+  createdAt: string
+  provider?: AIProvider
+}
+
+const INITIAL_AI_SETTINGS: AISettings = {
+  provider: 'anthropic',
+  openaiApiKey: '',
+  anthropicApiKey: '',
+  googleApiKey: '',
+  ollamaEndpoint: 'http://localhost:11434',
+  ollamaModel: 'llama3.2',
+  openaiModel: 'gpt-4o',
+  anthropicModel: 'claude-sonnet-4-20250514',
+  googleModel: 'gemini-2.0-flash',
+  commandSuggestionsEnabled: true,
+  notificationsEnabled: true,
+}
+
+export interface WorkspacePreset {
+  id: string
+  name: string
+  layoutCount: number
+  workingDirectory: string
+  agentConfig: Record<string, number>
+  customCommand: string
+  createdAt: string
+}
+
+export interface Snippet {
+  id: string
+  title: string
+  content: string
+  category: string
+  language: string
+  tags: string[]
+  isPinned: boolean
+  createdAt: string
+  usageCount: number
+}
+
+export interface EnvVar {
+  id: string
+  key: string
+  value: string
+  comment?: string
+  isSecret: boolean
+  workspaceId?: string
+}
+
+export interface SSHConnectionInfo {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  authMethod: 'password' | 'key'
+  keyPath?: string
+  lastConnectedAt?: number
+}
+
+export type AgentCli = 'claude' | 'codex' | 'gemini' | 'opencode' | 'cursor' | 'droid' | 'copilot'
 export type AgentRole = 'builder' | 'reviewer' | 'scout' | 'coord' | 'custom'
 export type TerminalShellKind = 'auto' | 'powershell' | 'command-prompt' | 'git-bash'
 export type TerminalSessionKind = 'local' | 'agent-attached'
@@ -103,7 +213,35 @@ export interface TerminalPane {
   isLocked?: boolean
   runtimeSessionId?: string
   runtimeSession?: TerminalSessionSnapshot | null
+  layoutColumn?: number
+  layoutRow?: number
 }
+
+export interface BrowserPane {
+  id: string
+  url: string
+  title?: string
+  x: number
+  y: number
+  width: number
+  height: number
+  isActive: boolean
+  label?: string
+  createdAt: number
+  webviewWindowId?: string
+}
+
+export interface SavedBrowserTab {
+  id: string
+  url: string
+  title: string
+  history: string[]
+  historyIndex: number
+  pinned?: boolean
+  favicon?: string
+}
+
+export type BrowserSplitMode = 'full' | 'split-right' | 'split-bottom'
 
 export interface SwarmAgent {
   id: string
@@ -159,6 +297,7 @@ export interface SwarmSession {
 export interface LaunchWorkspacePayload {
   agentConfig?: Record<AgentCli, number>
   agentBootstrapCommands?: Partial<Record<AgentCli, string | null>>
+  customBootstrapCommand?: string | null
   name?: string
   workingDirectory: string
 }
@@ -206,13 +345,25 @@ export interface AppState {
   commandAliases: Record<string, string>
   starredCommands: string[]
   commandSnippets: Array<{ id: string; name: string; command: string }>
+  siulkVoice: SiulkVoiceSettings
+  terminalSettings: TerminalSettings
+  browserTabs: SavedBrowserTab[]
+  browserSplitMode: BrowserSplitMode
+  browserActiveTabId: string | null
+  browserShowBookmarks: boolean
+  aiSettings: AISettings
+  aiChatHistory: AIChatMessage[]
+  sshConnections: SSHConnectionInfo[]
+  notificationSettings: NotificationSettings
 
   setTheme: (theme: ThemeId) => void
   applyCustomTheme: (theme: CustomThemePreset) => void
   clearCustomTheme: () => void
   setView: (view: ViewId) => void
   setSettingsTab: (tab: SettingsTab) => void
+  setNotificationSettings: (settings: Partial<NotificationSettings>) => void
   removeWorkspaceTab: (id: string) => void
+  updateWorkspaceTab: (id: string, changes: Partial<Pick<WorkspaceTab, 'name' | 'color'>>) => void
   setActiveTab: (id: string) => void
   addKanbanTask: (task: KanbanTask) => void
   moveKanbanTask: (taskId: string, column: KanbanTask['column']) => void
@@ -245,7 +396,8 @@ export interface AppState {
   setActiveWorkspaceSplitDirection: (direction: TerminalSplitDirection) => void
   launchWorkspace: (payload: LaunchWorkspacePayload) => void
   launchQuickShellWorkspace: (payload: { workingDirectory?: string; shellKind?: TerminalShellKind; name?: string; shellBootstrapCommand?: string | null }) => void
-  addPaneToActiveWorkspace: (payload?: { shellKind?: TerminalShellKind; label?: string; splitDirection?: TerminalSplitDirection; shellBootstrapCommand?: string | null }) => string | null
+  addPaneToActiveWorkspace: (payload?: { shellKind?: TerminalShellKind; label?: string; splitDirection?: TerminalSplitDirection; shellBootstrapCommand?: string | null; workingDirectory?: string; anchorPaneId?: string }) => string | null
+  launchCanvas: (payload: LaunchWorkspacePayload) => void
   launchSwarm: (payload: LaunchSwarmPayload) => void
   stopSwarm: () => void
   sendSwarmMessage: (target: 'all' | string, content: string) => void
@@ -262,9 +414,47 @@ export interface AppState {
   consumePendingTerminalCommand: () => string | null
   isPro: () => boolean
   isTrialActive: () => boolean
+  setSiulkVoiceEnabled: (enabled: boolean) => void
+  setSiulkVoiceTranscriptionMode: (mode: SiulkVoiceTranscriptionMode) => void
+  setWhisperModel: (model: WhisperModel) => void
+  setWhisperLanguage: (lang: WhisperLanguage) => void
+  setSiulkVoicePushToTalkKey: (key: string | null) => void
+  setSiulkVoiceToggleRecordingKey: (key: string | null) => void
+  setSiulkVoiceSelectedMicrophone: (mic: string | null) => void
+  setSiulkVoiceRecording: (recording: boolean) => void
+  setSiulkVoiceProcessing: (processing: boolean) => void
+  setSiulkVoiceLastTranscript: (transcript: string | null) => void
+  setTerminalDefaultShell: (shell: TerminalShellKind) => void
+  setBrowserTabs: (tabs: SavedBrowserTab[]) => void
+  setBrowserSplitMode: (mode: BrowserSplitMode) => void
+  setBrowserActiveTabId: (id: string | null) => void
+  setBrowserShowBookmarks: (show: boolean) => void
+  setAISettings: (updates: Partial<AISettings>) => void
+  addAIChatMessage: (message: AIChatMessage) => void
+  clearAIChatHistory: () => void
+  addSSHConnection: (conn: SSHConnectionInfo) => void
+  removeSSHConnection: (id: string) => void
+  updateSSHLastConnected: (id: string) => void
+  envVars: EnvVar[]
+  addEnvVar: (v: EnvVar) => void
+  updateEnvVar: (id: string, changes: Partial<EnvVar>) => void
+  removeEnvVar: (id: string) => void
+  previewPort: number
+  setPreviewPort: (port: number) => void
+  filePreviewPath: string | null
+  setFilePreviewPath: (path: string | null) => void
+  snippets: Snippet[]
+  addSnippet: (s: Snippet) => void
+  updateSnippet: (id: string, changes: Partial<Snippet>) => void
+  removeSnippet: (id: string) => void
+  incrementSnippetUsage: (id: string) => void
+  workspacePresets: WorkspacePreset[]
+  addWorkspacePreset: (p: WorkspacePreset) => void
+  removeWorkspacePreset: (id: string) => void
+  updateWorkspacePreset: (id: string, changes: Partial<WorkspacePreset>) => void
 }
 
-const INITIAL_AGENT_CONFIG: Record<AgentCli, number> = { claude: 0, codex: 0, gemini: 0, opencode: 0, cursor: 0 }
+const INITIAL_AGENT_CONFIG: Record<AgentCli, number> = { claude: 0, codex: 0, gemini: 0, opencode: 0, cursor: 0, droid: 0, copilot: 0 }
 
 const INITIAL_USER_PROFILE = {
   username: 'developer',
@@ -281,17 +471,38 @@ const AGENT_LABELS: Record<AgentCli, string> = {
   gemini: 'Gemini',
   opencode: 'OpenCode',
   cursor: 'Cursor',
+  droid: 'Droid',
+  copilot: 'Copilot',
 }
 
 const SWARM_ROLE_SEQUENCE: AgentRole[] = ['coord', 'builder', 'reviewer', 'scout', 'builder', 'reviewer', 'custom']
 
-const THEME_IDS: ThemeId[] = ['sloerspace', 'github-dark', 'catppuccin-mocha', 'rose-pine', 'one-dark-pro', 'nord', 'dracula', 'everforest-dark', 'poimandres', 'oled-dark', 'neon-tech', 'synthwave', 'catppuccin-latte', 'github-light', 'rose-pine-dawn']
-const VIEW_IDS: ViewId[] = ['home', 'terminal', 'kanban', 'agents', 'prompts', 'settings', 'swarm-launch', 'swarm-dashboard', 'workspace-wizard', 'login']
-const SETTINGS_TAB_IDS: SettingsTab[] = ['appearance', 'shortcuts', 'ai-agents', 'account', 'api-keys', 'data']
-const WORKSPACE_VIEW_IDS: WorkspaceViewId[] = ['terminal', 'swarm-dashboard']
-const WORKSPACE_KINDS: WorkspaceKind[] = ['terminal', 'swarm']
+const THEME_IDS: ThemeId[] = ['sloerspace', 'github-dark', 'catppuccin-mocha', 'rose-pine', 'one-dark-pro', 'nord', 'dracula', 'everforest-dark', 'poimandres', 'oled-dark', 'dark-contrast-puro', 'neon-tech', 'synthwave', 'catppuccin-latte', 'github-light', 'rose-pine-dawn']
+const VIEW_IDS: ViewId[] = ['home', 'terminal', 'canvas', 'kanban', 'agents', 'prompts', 'settings', 'swarm-launch', 'swarm-dashboard', 'workspace-wizard', 'canvas-wizard', 'login', 'browser']
+const SETTINGS_TAB_IDS: SettingsTab[] = ['account', 'appearance', 'shortcuts', 'ai-agents', 'ai-settings', 'siulk-voice', 'notifications', 'cli', 'terminal', 'api-keys', 'data', 'help']
+const WHISPER_MODELS: WhisperModel[] = ['tiny.en', 'base.en', 'large-v3']
+const WHISPER_LANGUAGES: WhisperLanguage[] = ['en', 'es', 'fr', 'de', 'ja', 'zh']
+
+const INITIAL_SIULK_VOICE: SiulkVoiceSettings = {
+  enabled: false,
+  transcriptionMode: 'local',
+  whisperModel: 'tiny.en',
+  whisperLanguage: 'en',
+  pushToTalkKey: null,
+  toggleRecordingKey: null,
+  selectedMicrophone: null,
+  isRecording: false,
+  isProcessing: false,
+  lastTranscript: null,
+}
+
+const INITIAL_TERMINAL_SETTINGS: TerminalSettings = {
+  defaultShell: 'auto',
+}
+const WORKSPACE_VIEW_IDS: WorkspaceViewId[] = ['terminal', 'canvas', 'swarm-dashboard', 'browser']
+const WORKSPACE_KINDS: WorkspaceKind[] = ['terminal', 'canvas', 'swarm', 'browser']
 const TERMINAL_SPLIT_DIRECTIONS: TerminalSplitDirection[] = ['horizontal', 'vertical']
-const AGENT_CLIS: AgentCli[] = ['claude', 'codex', 'gemini', 'opencode', 'cursor']
+const AGENT_CLIS: AgentCli[] = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'droid', 'copilot']
 const TERMINAL_SHELL_KINDS: TerminalShellKind[] = ['auto', 'powershell', 'command-prompt', 'git-bash']
 const TERMINAL_SESSION_KINDS: TerminalSessionKind[] = ['local', 'agent-attached']
 const AGENT_ROLES: AgentRole[] = ['builder', 'reviewer', 'scout', 'coord', 'custom']
@@ -501,6 +712,8 @@ const createTerminalPane = (
     commands?: CommandBlock[]
     shellKind?: TerminalShellKind
     shellBootstrapCommand?: string | null
+    layoutColumn?: number
+    layoutRow?: number
   },
 ): TerminalPane => ({
   id: generateId(),
@@ -517,7 +730,43 @@ const createTerminalPane = (
   commandHistory: [],
   runtimeSessionId: generateId(),
   runtimeSession: null,
+  layoutColumn: typeof options?.layoutColumn === 'number' ? Math.max(0, Math.trunc(options.layoutColumn)) : undefined,
+  layoutRow: typeof options?.layoutRow === 'number' ? Math.max(0, Math.trunc(options.layoutRow)) : undefined,
 })
+
+const hasExplicitPaneLayout = (pane: TerminalPane) => (
+  typeof pane.layoutColumn === 'number' || typeof pane.layoutRow === 'number'
+)
+
+const getPaneLayoutColumn = (pane: TerminalPane, fallbackColumn: number) => (
+  typeof pane.layoutColumn === 'number' ? Math.max(0, Math.trunc(pane.layoutColumn)) : fallbackColumn
+)
+
+const getPaneLayoutRow = (pane: TerminalPane) => (
+  typeof pane.layoutRow === 'number' ? Math.max(0, Math.trunc(pane.layoutRow)) : 0
+)
+
+const normalizePaneSplitLayout = (panes: TerminalPane[]) => {
+  const positioned = panes.map((pane, index) => ({
+    pane,
+    index,
+    column: getPaneLayoutColumn(pane, index),
+    row: getPaneLayoutRow(pane),
+  }))
+
+  const columns = Array.from(new Set(positioned.map((entry) => entry.column))).sort((left, right) => left - right)
+
+  return columns.flatMap((column, normalizedColumn) => (
+    positioned
+      .filter((entry) => entry.column === column)
+      .sort((left, right) => (left.row - right.row) || (left.index - right.index))
+      .map((entry, normalizedRow) => ({
+        ...entry.pane,
+        layoutColumn: normalizedColumn,
+        layoutRow: normalizedRow,
+      }))
+  ))
+}
 
 const expandAgentAssignments = (config: Record<AgentCli, number>) => (
   Object.entries(config) as [AgentCli, number][]
@@ -529,12 +778,15 @@ const createTerminalPanes = (
   config: Record<AgentCli, number>,
   shellKind: TerminalShellKind = 'auto',
   bootstrapCommands?: Partial<Record<AgentCli, string | null>>,
+  customBootstrapCommand?: string | null,
 ) => {
   const assignedAgents = expandAgentAssignments(config)
 
   return Array.from({ length: paneCount }, (_, index): TerminalPane => {
     const agentCli = assignedAgents[index]
-    const shellBootstrapCommand = agentCli && bootstrapCommands?.[agentCli] ? bootstrapCommands[agentCli] : null
+    const shellBootstrapCommand = agentCli && bootstrapCommands?.[agentCli]
+      ? bootstrapCommands[agentCli]
+      : (!agentCli && customBootstrapCommand ? customBootstrapCommand : null)
     return createTerminalPane(workingDirectory, {
       agentCli,
       sessionKind: 'local',
@@ -827,6 +1079,8 @@ const normalizeTerminalPane = (
     isLocked: getBoolean(value.isLocked, false),
     runtimeSessionId: getString(value.runtimeSessionId) || generateId(),
     runtimeSession: runtimeSession ? { ...runtimeSession, sessionKind } : null,
+    layoutColumn: typeof value.layoutColumn === 'number' ? Math.max(0, Math.trunc(value.layoutColumn)) : undefined,
+    layoutRow: typeof value.layoutRow === 'number' ? Math.max(0, Math.trunc(value.layoutRow)) : undefined,
   } satisfies TerminalPane
 }
 
@@ -869,9 +1123,9 @@ const normalizeWorkspaceTabs = (value: unknown) => {
       continue
     }
 
-    const fallbackKind: WorkspaceKind = entry.view === 'swarm-dashboard' ? 'swarm' : 'terminal'
+    const fallbackKind: WorkspaceKind = entry.view === 'swarm-dashboard' ? 'swarm' : entry.view === 'browser' ? 'browser' : 'terminal'
     const kind = getEnumValue(WORKSPACE_KINDS, entry.kind, fallbackKind)
-    const fallbackView: WorkspaceViewId = kind === 'swarm' ? 'swarm-dashboard' : 'terminal'
+    const fallbackView: WorkspaceViewId = kind === 'swarm' ? 'swarm-dashboard' : kind === 'browser' ? 'browser' : 'terminal'
 
     tabs.push({
       id: getString(entry.id) || generateId(),
@@ -1188,6 +1442,35 @@ const normalizeCustomTheme = (value: unknown): CustomThemePreset | null => {
   return requiredFields.every(Boolean) ? preset : null
 }
 
+const normalizeSiulkVoice = (value: unknown): SiulkVoiceSettings => {
+  if (!isRecord(value)) {
+    return { ...INITIAL_SIULK_VOICE }
+  }
+
+  return {
+    enabled: getBoolean(value.enabled, false),
+    transcriptionMode: 'local',
+    whisperModel: getEnumValue(WHISPER_MODELS, value.whisperModel, 'tiny.en'),
+    whisperLanguage: getEnumValue(WHISPER_LANGUAGES, value.whisperLanguage, 'en'),
+    pushToTalkKey: getOptionalString(value.pushToTalkKey),
+    toggleRecordingKey: getOptionalString(value.toggleRecordingKey),
+    selectedMicrophone: getOptionalString(value.selectedMicrophone),
+    isRecording: false,
+    isProcessing: false,
+    lastTranscript: null,
+  }
+}
+
+const normalizeTerminalSettings = (value: unknown): TerminalSettings => {
+  if (!isRecord(value)) {
+    return { ...INITIAL_TERMINAL_SETTINGS }
+  }
+
+  return {
+    defaultShell: getEnumValue(TERMINAL_SHELL_KINDS, value.defaultShell, 'auto'),
+  }
+}
+
 const normalizePersistedState = (value: unknown): Partial<AppState> | null => {
   const persistedState = isRecord(value) && isRecord(value.state) ? value.state : value
 
@@ -1227,6 +1510,8 @@ const normalizePersistedState = (value: unknown): Partial<AppState> | null => {
     commandAliases: normalizeCommandAliases(persistedState.commandAliases),
     starredCommands: normalizeStringArray(persistedState.starredCommands, 200),
     commandSnippets: normalizeCommandSnippets(persistedState.commandSnippets),
+    siulkVoice: normalizeSiulkVoice(persistedState.siulkVoice),
+    terminalSettings: normalizeTerminalSettings(persistedState.terminalSettings),
   }
 }
 
@@ -1259,6 +1544,16 @@ export const useStore = create<AppState>()(persist(
     commandAliases: {},
     starredCommands: [],
     commandSnippets: [],
+    siulkVoice: { ...INITIAL_SIULK_VOICE },
+    terminalSettings: { ...INITIAL_TERMINAL_SETTINGS },
+    browserTabs: [],
+    browserSplitMode: 'full' as BrowserSplitMode,
+    browserActiveTabId: null,
+    browserShowBookmarks: true,
+    aiSettings: { ...INITIAL_AI_SETTINGS },
+    aiChatHistory: [],
+    sshConnections: [],
+    notificationSettings: { sounds: true, os: true },
 
     setTheme: (theme) => {
       applyResolvedTheme(theme, null)
@@ -1275,6 +1570,11 @@ export const useStore = create<AppState>()(persist(
     },
     setView: (view) => set({ currentView: view }),
     setSettingsTab: (tab) => set({ settingsTab: tab }),
+    setNotificationSettings: (settings) => set((state) => ({ notificationSettings: { ...state.notificationSettings, ...settings } })),
+
+    updateWorkspaceTab: (id, changes) => set((state) => ({
+      workspaceTabs: state.workspaceTabs.map((tab) => tab.id === id ? { ...tab, ...changes } : tab),
+    })),
 
     removeWorkspaceTab: (id) => set((state) => {
       const nextTabs = state.workspaceTabs.filter((tab) => tab.id !== id)
@@ -1413,11 +1713,14 @@ export const useStore = create<AppState>()(persist(
         targetWorkspaceId = sessionId
         const filtered = panes.filter((pane) => pane.id !== paneId)
         const removedActive = panes[paneIndex]?.isActive
+        const nextPaneSet = filtered.some(hasExplicitPaneLayout)
+          ? normalizePaneSplitLayout(filtered)
+          : filtered
 
-        nextSessions[sessionId] = filtered.map((pane, index) => ({
+        nextSessions[sessionId] = nextPaneSet.map((pane, index) => ({
           ...pane,
           isActive: removedActive
-            ? index === Math.max(0, Math.min(paneIndex - 1, filtered.length - 1))
+            ? index === Math.max(0, Math.min(paneIndex - 1, nextPaneSet.length - 1))
             : pane.isActive,
         }))
         break
@@ -1543,7 +1846,7 @@ export const useStore = create<AppState>()(persist(
         workingDirectory,
         createdAt: new Date().toISOString(),
       }
-      const panes = createTerminalPanes(paneCount, workingDirectory, agentConfig, 'auto', payload.agentBootstrapCommands)
+      const panes = createTerminalPanes(paneCount, workingDirectory, agentConfig, 'auto', payload.agentBootstrapCommands, payload.customBootstrapCommand)
 
       set((currentState) => ({
         workspaceTabs: [...markActiveTabs(currentState.workspaceTabs, null), tab],
@@ -1553,6 +1856,39 @@ export const useStore = create<AppState>()(persist(
           [id]: panes,
         },
         currentView: 'terminal',
+        wizardStep: 0,
+        wizardAgentConfig: { ...INITIAL_AGENT_CONFIG },
+      }))
+    },
+
+    launchCanvas: (payload) => {
+      const state = get()
+      const paneCount = Math.max(1, state.wizardLayout)
+      const workingDirectory = payload.workingDirectory.trim() || getFallbackWorkingDirectory()
+      const agentConfig = payload.agentConfig ?? state.wizardAgentConfig
+      const id = generateId()
+      const tab: WorkspaceTab = {
+        id,
+        name: payload.name?.trim() || getNextWorkspaceName(state.workspaceTabs, 'canvas', 'Canvas'),
+        color: nextWorkspaceColor(state.workspaceTabs.length),
+        view: 'canvas',
+        kind: 'canvas',
+        splitDirection: 'vertical',
+        paneCount,
+        isActive: true,
+        workingDirectory,
+        createdAt: new Date().toISOString(),
+      }
+      const panes = createTerminalPanes(paneCount, workingDirectory, agentConfig, 'auto', payload.agentBootstrapCommands, payload.customBootstrapCommand)
+
+      set((currentState) => ({
+        workspaceTabs: [...markActiveTabs(currentState.workspaceTabs, null), tab],
+        activeTabId: id,
+        terminalSessions: {
+          ...currentState.terminalSessions,
+          [id]: panes,
+        },
+        currentView: 'canvas',
         wizardStep: 0,
         wizardAgentConfig: { ...INITIAL_AGENT_CONFIG },
       }))
@@ -1608,40 +1944,125 @@ export const useStore = create<AppState>()(persist(
         return null
       }
 
-      const activeWorkspace = state.workspaceTabs.find((tab) => tab.id === activeWorkspaceId && tab.kind === 'terminal')
+      const activeWorkspace = state.workspaceTabs.find((tab) => tab.id === activeWorkspaceId && (tab.kind === 'terminal' || tab.kind === 'canvas'))
       const panes = state.terminalSessions[activeWorkspaceId] ?? []
 
       if (!activeWorkspace) {
         return null
       }
 
-      const workingDirectory = activeWorkspace.workingDirectory || panes[0]?.cwd || getFallbackWorkingDirectory()
-      const shellKind = payload?.shellKind ?? 'auto'
-      const nextPane = createTerminalPane(workingDirectory, {
-        isActive: true,
-        label: payload?.label,
-        shellKind,
-        shellBootstrapCommand: payload?.shellBootstrapCommand,
-      })
+      const anchorPane = payload?.anchorPaneId
+        ? panes.find((pane) => pane.id === payload.anchorPaneId)
+        : panes.find((pane) => pane.isActive) ?? panes[panes.length - 1]
+      const workingDirectory = payload?.workingDirectory?.trim()
+        || anchorPane?.cwd
+        || activeWorkspace.workingDirectory
+        || panes[0]?.cwd
+        || getFallbackWorkingDirectory()
+      const shellKind = payload?.shellKind ?? anchorPane?.shellKind ?? 'auto'
+      const splitDirection = payload?.splitDirection ?? activeWorkspace.splitDirection ?? 'vertical'
+      const shouldUseExplicitLayout = Boolean(payload?.anchorPaneId || panes.some(hasExplicitPaneLayout))
+
+      const nextPane = (() => {
+        if (!shouldUseExplicitLayout) {
+          return createTerminalPane(workingDirectory, {
+            isActive: true,
+            label: payload?.label,
+            shellKind,
+            shellBootstrapCommand: payload?.shellBootstrapCommand,
+          })
+        }
+
+        const normalizedPanes = normalizePaneSplitLayout(
+          panes.map((pane, index) => ({
+            ...pane,
+            layoutColumn: getPaneLayoutColumn(pane, index),
+            layoutRow: getPaneLayoutRow(pane),
+          }))
+        )
+        const positionedAnchor = normalizedPanes.find((pane) => pane.id === anchorPane?.id) ?? normalizedPanes[normalizedPanes.length - 1]
+        const anchorColumn = getPaneLayoutColumn(positionedAnchor, Math.max(0, normalizedPanes.length - 1))
+        const anchorRow = getPaneLayoutRow(positionedAnchor)
+
+        if (splitDirection === 'horizontal') {
+          return createTerminalPane(workingDirectory, {
+            isActive: true,
+            label: payload?.label,
+            shellKind,
+            shellBootstrapCommand: payload?.shellBootstrapCommand,
+            layoutColumn: anchorColumn,
+            layoutRow: anchorRow + 1,
+          })
+        }
+
+        return createTerminalPane(workingDirectory, {
+          isActive: true,
+          label: payload?.label,
+          shellKind,
+          shellBootstrapCommand: payload?.shellBootstrapCommand,
+          layoutColumn: anchorColumn + 1,
+          layoutRow: 0,
+        })
+      })()
 
       set((currentState) => ({
         terminalSessions: {
           ...currentState.terminalSessions,
-          [activeWorkspaceId]: [
-            ...(currentState.terminalSessions[activeWorkspaceId] ?? []).map((pane) => ({ ...pane, isActive: false })),
-            nextPane,
-          ],
+          [activeWorkspaceId]: (() => {
+            const currentPanes = currentState.terminalSessions[activeWorkspaceId] ?? []
+
+            if (!shouldUseExplicitLayout) {
+              return [
+                ...currentPanes.map((pane) => ({ ...pane, isActive: false })),
+                nextPane,
+              ]
+            }
+
+            const normalizedPanes = normalizePaneSplitLayout(
+              currentPanes.map((pane, index) => ({
+                ...pane,
+                isActive: false,
+                layoutColumn: getPaneLayoutColumn(pane, index),
+                layoutRow: getPaneLayoutRow(pane),
+              }))
+            )
+            const positionedAnchor = normalizedPanes.find((pane) => pane.id === anchorPane?.id) ?? normalizedPanes[normalizedPanes.length - 1]
+            const anchorColumn = getPaneLayoutColumn(positionedAnchor, Math.max(0, normalizedPanes.length - 1))
+            const anchorRow = getPaneLayoutRow(positionedAnchor)
+
+            if (splitDirection === 'horizontal') {
+              return normalizePaneSplitLayout([
+                ...normalizedPanes.map((pane) => ({
+                  ...pane,
+                  layoutRow: getPaneLayoutColumn(pane, 0) === anchorColumn && getPaneLayoutRow(pane) > anchorRow
+                    ? getPaneLayoutRow(pane) + 1
+                    : getPaneLayoutRow(pane),
+                })),
+                nextPane,
+              ])
+            }
+
+            return normalizePaneSplitLayout([
+              ...normalizedPanes.map((pane) => ({
+                ...pane,
+                layoutColumn: getPaneLayoutColumn(pane, 0) > anchorColumn
+                  ? getPaneLayoutColumn(pane, 0) + 1
+                  : getPaneLayoutColumn(pane, 0),
+              })),
+              nextPane,
+            ])
+          })(),
         },
         workspaceTabs: currentState.workspaceTabs.map((tab) => (
           tab.id === activeWorkspaceId
             ? {
               ...tab,
               paneCount: (currentState.terminalSessions[activeWorkspaceId] ?? []).length + 1,
-              splitDirection: payload?.splitDirection ?? tab.splitDirection ?? 'vertical',
+              splitDirection,
             }
             : tab
         )),
-        currentView: 'terminal',
+        currentView: activeWorkspace.kind === 'canvas' ? 'canvas' : 'terminal',
       }))
 
       return nextPane.id
@@ -1854,11 +2275,26 @@ export const useStore = create<AppState>()(persist(
       })
     },
 
-    logout: () => set({
-      isLoggedIn: false,
-      authToken: null,
-      sessionDevice: null,
-    }),
+    logout: () => {
+      set({
+        isLoggedIn: false,
+        authToken: null,
+        sessionDevice: null,
+        pendingTerminalCommand: null,
+      })
+      try {
+        const raw = localStorage.getItem('sloerspace-dev-store')
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          if (parsed?.state) {
+            parsed.state.authToken = null
+            parsed.state.isLoggedIn = false
+            parsed.state.sessionDevice = null
+            localStorage.setItem('sloerspace-dev-store', JSON.stringify(parsed))
+          }
+        }
+      } catch { /* best-effort token purge */ }
+    },
 
     startTrial: () => set({
       trialStartedAt: new Date().toISOString(),
@@ -1894,10 +2330,83 @@ export const useStore = create<AppState>()(persist(
       const trialEnd = new Date(trialStartedAt).getTime() + 7 * 24 * 60 * 60 * 1000
       return Date.now() < trialEnd
     },
+
+    setSiulkVoiceEnabled: (enabled) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, enabled },
+    })),
+    setSiulkVoiceTranscriptionMode: (mode) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, transcriptionMode: mode },
+    })),
+    setWhisperModel: (model) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, whisperModel: model },
+    })),
+    setWhisperLanguage: (lang) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, whisperLanguage: lang },
+    })),
+    setSiulkVoicePushToTalkKey: (key) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, pushToTalkKey: key },
+    })),
+    setSiulkVoiceToggleRecordingKey: (key) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, toggleRecordingKey: key },
+    })),
+    setSiulkVoiceSelectedMicrophone: (mic) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, selectedMicrophone: mic },
+    })),
+    setSiulkVoiceRecording: (recording) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, isRecording: recording },
+    })),
+    setSiulkVoiceProcessing: (processing) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, isProcessing: processing },
+    })),
+    setSiulkVoiceLastTranscript: (transcript) => set((state) => ({
+      siulkVoice: { ...state.siulkVoice, lastTranscript: transcript },
+    })),
+    setTerminalDefaultShell: (shell) => set((state) => ({
+      terminalSettings: { ...state.terminalSettings, defaultShell: shell },
+    })),
+    setBrowserTabs: (tabs) => set({ browserTabs: tabs }),
+    setBrowserSplitMode: (mode) => set({ browserSplitMode: mode }),
+    setBrowserActiveTabId: (id) => set({ browserActiveTabId: id }),
+    setBrowserShowBookmarks: (show) => set({ browserShowBookmarks: show }),
+    setAISettings: (updates) => set((state) => ({
+      aiSettings: { ...state.aiSettings, ...updates },
+    })),
+    addAIChatMessage: (message) => set((state) => ({
+      aiChatHistory: [...state.aiChatHistory, message].slice(-100),
+    })),
+    clearAIChatHistory: () => set({ aiChatHistory: [] }),
+    addSSHConnection: (conn) => set((state) => ({
+      sshConnections: [...state.sshConnections, conn],
+    })),
+    removeSSHConnection: (id) => set((state) => ({
+      sshConnections: state.sshConnections.filter((c) => c.id !== id),
+    })),
+    updateSSHLastConnected: (id) => set((state) => ({
+      sshConnections: state.sshConnections.map((c) => c.id === id ? { ...c, lastConnectedAt: Date.now() } : c),
+    })),
+    envVars: [],
+    addEnvVar: (v) => set((state) => ({ envVars: [...state.envVars, v] })),
+    updateEnvVar: (id, changes) => set((state) => ({
+      envVars: state.envVars.map((v) => v.id === id ? { ...v, ...changes } : v),
+    })),
+    removeEnvVar: (id) => set((state) => ({ envVars: state.envVars.filter((v) => v.id !== id) })),
+    previewPort: 3000,
+    setPreviewPort: (port) => set({ previewPort: port }),
+    filePreviewPath: null,
+    setFilePreviewPath: (path) => set({ filePreviewPath: path }),
+    snippets: [],
+    addSnippet: (s) => set((state) => ({ snippets: [...state.snippets, s] })),
+    updateSnippet: (id, changes) => set((state) => ({ snippets: state.snippets.map((s) => s.id === id ? { ...s, ...changes } : s) })),
+    removeSnippet: (id) => set((state) => ({ snippets: state.snippets.filter((s) => s.id !== id) })),
+    incrementSnippetUsage: (id) => set((state) => ({ snippets: state.snippets.map((s) => s.id === id ? { ...s, usageCount: s.usageCount + 1 } : s) })),
+    workspacePresets: [],
+    addWorkspacePreset: (p) => set((state) => ({ workspacePresets: [...state.workspacePresets, p] })),
+    removeWorkspacePreset: (id) => set((state) => ({ workspacePresets: state.workspacePresets.filter((p) => p.id !== id) })),
+    updateWorkspacePreset: (id, changes) => set((state) => ({ workspacePresets: state.workspacePresets.map((p) => p.id === id ? { ...p, ...changes } : p) })),
   }),
   {
     name: 'sloerspace-dev-store',
-    version: 8,
+    version: 10,
     storage: createJSONStorage(() => localStorage),
     migrate: (persistedState, version) => {
       const state = persistedState as Record<string, unknown>
@@ -1915,6 +2424,20 @@ export const useStore = create<AppState>()(persist(
       }
       if (version < 8) {
         state.hasCompletedOnboarding = true
+      }
+      if (version < 9) {
+        state.siulkVoice = { ...INITIAL_SIULK_VOICE }
+        state.terminalSettings = { ...INITIAL_TERMINAL_SETTINGS }
+      }
+      if (version < 10) {
+        state.browserTabs = []
+        state.browserSplitMode = 'full'
+        state.browserActiveTabId = null
+        state.browserShowBookmarks = true
+        // Reset transient views on upgrade
+        if (['workspace-wizard', 'canvas-wizard', 'swarm-launch'].includes(state.currentView as string)) {
+          state.currentView = 'home'
+        }
       }
       return state as never
     },
@@ -1944,6 +2467,14 @@ export const useStore = create<AppState>()(persist(
       commandAliases: state.commandAliases,
       starredCommands: state.starredCommands,
       commandSnippets: state.commandSnippets,
+      siulkVoice: state.siulkVoice,
+      terminalSettings: state.terminalSettings,
+      browserTabs: state.browserTabs,
+      browserSplitMode: state.browserSplitMode,
+      browserActiveTabId: state.browserActiveTabId,
+      browserShowBookmarks: state.browserShowBookmarks,
+      aiSettings: state.aiSettings,
+      sshConnections: state.sshConnections,
     }),
     merge: (persistedState, currentState) => {
       const normalizedState = normalizePersistedState(persistedState)
@@ -1964,3 +2495,22 @@ export const useStore = create<AppState>()(persist(
     },
   },
 ))
+
+export const useStoreHydrated = () => {
+  const [hydrated, setHydrated] = useState(false)
+
+  useEffect(() => {
+    try {
+      if (useStore.persist.hasHydrated()) {
+        setHydrated(true)
+        return
+      }
+      const unsub = useStore.persist.onFinishHydration(() => setHydrated(true))
+      return unsub
+    } catch {
+      setHydrated(true)
+    }
+  }, [])
+
+  return hydrated
+}

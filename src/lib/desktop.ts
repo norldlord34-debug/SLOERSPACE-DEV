@@ -129,6 +129,15 @@ export interface TerminalSessionStreamEvent {
   sequence: number
 }
 
+export interface DroppedFileResult {
+  path: string
+  escapedPath: string
+  isImage: boolean
+  isDir: boolean
+  fileName: string
+  iterm2Sequence: string | null
+}
+
 const hasWindow = typeof window !== 'undefined'
 
 export function isTauriApp() {
@@ -550,5 +559,377 @@ export async function openFolderDialog(defaultPath?: string): Promise<string | n
     return Array.isArray(result) ? (result[0] ?? null) : result
   } catch {
     return null
+  }
+}
+
+// ── Browser Pane Management (native WebView2) ──
+
+export interface BrowserPaneInfo {
+  id: string
+  url: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export async function browserCreatePane(
+  paneId: string,
+  url: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Promise<BrowserPaneInfo | null> {
+  if (!isTauriApp()) return null
+  try {
+    return await tauriInvoke<BrowserPaneInfo>('browser_create_pane', { paneId, url, x, y, width, height })
+  } catch (e) {
+    console.error('Failed to create browser pane:', e)
+    return null
+  }
+}
+
+export async function browserClosePane(paneId: string): Promise<boolean> {
+  if (!isTauriApp()) return false
+  try {
+    await tauriInvoke<void>('browser_close_pane', { paneId })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function browserNavigatePane(paneId: string, url: string): Promise<BrowserPaneInfo | null> {
+  if (!isTauriApp()) return null
+  try {
+    return await tauriInvoke<BrowserPaneInfo>('browser_navigate_pane', { paneId, url })
+  } catch (e) {
+    console.error('Failed to navigate browser pane:', e)
+    return null
+  }
+}
+
+export async function browserResizePane(
+  paneId: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Promise<boolean> {
+  if (!isTauriApp()) return false
+  try {
+    await tauriInvoke<void>('browser_resize_pane', { paneId, url: undefined, x, y, width, height })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function browserListPanes(): Promise<BrowserPaneInfo[]> {
+  if (!isTauriApp()) return []
+  try {
+    return await tauriInvoke<BrowserPaneInfo[]>('browser_list_panes')
+  } catch {
+    return []
+  }
+}
+
+export async function browserSetVisible(paneId: string, visible: boolean): Promise<void> {
+  if (!isTauriApp()) return
+  try {
+    await tauriInvoke<void>('browser_set_visible', { paneId, visible })
+  } catch (e) {
+    console.error('Failed to set visibility:', e)
+  }
+}
+
+export async function browserToggleDevtools(paneId: string): Promise<boolean> {
+  if (!isTauriApp()) return false
+  try {
+    return await tauriInvoke<boolean>('browser_toggle_devtools', { paneId })
+  } catch (e) {
+    console.error('Failed to toggle devtools:', e)
+    return false
+  }
+}
+
+export interface GitStatusEntry {
+  path: string
+  status: string
+  staged: boolean
+}
+
+export interface GitLogEntry {
+  hash: string
+  short_hash: string
+  author: string
+  date: string
+  message: string
+}
+
+export interface GitInfo {
+  branch: string
+  entries: GitStatusEntry[]
+  ahead: number
+  behind: number
+  is_repo: boolean
+}
+
+export async function getGitStatus(cwd: string): Promise<GitInfo> {
+  if (!isTauriApp()) return { branch: '', entries: [], ahead: 0, behind: 0, is_repo: false }
+  try { return await tauriInvoke<GitInfo>('get_git_status', { cwd }) } catch { return { branch: '', entries: [], ahead: 0, behind: 0, is_repo: false } }
+}
+
+export async function getGitLog(cwd: string, count?: number): Promise<GitLogEntry[]> {
+  if (!isTauriApp()) return []
+  try { return await tauriInvoke<GitLogEntry[]>('get_git_log', { cwd, count: count ?? 30 }) } catch { return [] }
+}
+
+export async function getGitDiff(cwd: string, filePath?: string, staged?: boolean): Promise<string> {
+  if (!isTauriApp()) return ''
+  try { return await tauriInvoke<string>('get_git_diff', { cwd, filePath, staged }) } catch { return '' }
+}
+
+export async function gitStageFile(cwd: string, filePath: string): Promise<void> {
+  if (!isTauriApp()) return
+  await tauriInvoke<void>('git_stage_file', { cwd, filePath })
+}
+
+export async function gitUnstageFile(cwd: string, filePath: string): Promise<void> {
+  if (!isTauriApp()) return
+  await tauriInvoke<void>('git_unstage_file', { cwd, filePath })
+}
+
+export async function gitCommit(cwd: string, message: string): Promise<string> {
+  if (!isTauriApp()) return ''
+  return await tauriInvoke<string>('git_commit', { cwd, message })
+}
+
+export interface SSHConnection {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  auth_method: 'password' | 'key'
+  key_path?: string
+}
+
+export async function testSSHConnection(host: string, port: number, username: string): Promise<boolean> {
+  if (!isTauriApp()) return false
+  try { return await tauriInvoke<boolean>('test_ssh_connection', { host, port, username }) } catch { return false }
+}
+
+export async function getSSHBootstrapCommand(host: string, port: number, username: string, keyPath?: string): Promise<string> {
+  if (!isTauriApp()) return ''
+  try { return await tauriInvoke<string>('get_ssh_bootstrap_command', { host, port, username, keyPath }) } catch { return '' }
+}
+
+export interface FileContentResult {
+  content: string
+  path: string
+  size: number
+  is_binary: boolean
+}
+
+export interface TreeEntry {
+  name: string
+  path: string
+  is_dir: boolean
+  depth: number
+  size: number
+  children_count: number
+}
+
+export async function readFileContent(path: string): Promise<FileContentResult> {
+  if (!isTauriApp()) return { content: '', path, size: 0, is_binary: false }
+  return await tauriInvoke<FileContentResult>('read_file_content', { path })
+}
+
+export async function writeFileContent(path: string, content: string): Promise<void> {
+  if (!isTauriApp()) return
+  await tauriInvoke<void>('write_file_content', { path, content })
+}
+
+export interface EnvVarEntry {
+  key: string
+  value: string
+  comment?: string
+}
+
+export async function readEnvFile(path: string): Promise<EnvVarEntry[]> {
+  if (!isTauriApp()) return []
+  try {
+    return await tauriInvoke<EnvVarEntry[]>('read_env_file', { path })
+  } catch {
+    return []
+  }
+}
+
+export async function writeEnvFile(path: string, vars: EnvVarEntry[]): Promise<void> {
+  if (!isTauriApp()) return
+  await tauriInvoke<void>('write_env_file', { path, vars })
+}
+
+export interface LanguageStat {
+  language: string
+  extension: string
+  file_count: number
+  line_count: number
+  color: string
+}
+
+export interface FileStat {
+  path: string
+  name: string
+  size: number
+  line_count: number
+  modified: number
+  language: string
+}
+
+export interface CodebaseStats {
+  root: string
+  total_files: number
+  total_lines: number
+  total_size: number
+  by_language: LanguageStat[]
+  largest_files: FileStat[]
+  recently_modified: FileStat[]
+}
+
+export async function indexCodebase(root: string, maxDepth?: number): Promise<CodebaseStats | null> {
+  if (!isTauriApp()) return null
+  try {
+    return await tauriInvoke<CodebaseStats>('index_codebase', { root, maxDepth: maxDepth ?? 6 })
+  } catch {
+    return null
+  }
+}
+
+export function getAssetUrl(filePath: string): string {
+  if (!isTauriApp()) return ''
+  try {
+    // Tauri v2 asset protocol
+    const normalized = filePath.replace(/\\/g, '/')
+    return `asset://localhost/${encodeURIComponent(normalized)}`
+  } catch {
+    return ''
+  }
+}
+
+export interface ProcessInfo {
+  pid: number
+  name: string
+  cpu_usage: number
+  memory_mb: number
+}
+
+export interface SystemStats {
+  cpu_usage: number
+  cpu_count: number
+  memory_used_mb: number
+  memory_total_mb: number
+  memory_percent: number
+  swap_used_mb: number
+  swap_total_mb: number
+  disk_used_gb: number
+  disk_total_gb: number
+  disk_percent: number
+  uptime_secs: number
+  top_processes: ProcessInfo[]
+}
+
+export interface PortEntry {
+  port: number
+  protocol: string
+  state: string
+  pid: number | null
+  process_name: string | null
+  local_address: string
+}
+
+export async function getSystemStats(): Promise<SystemStats | null> {
+  if (!isTauriApp()) return null
+  try {
+    return await tauriInvoke<SystemStats>('get_system_stats')
+  } catch {
+    return null
+  }
+}
+
+export async function scanActivePorts(): Promise<PortEntry[]> {
+  if (!isTauriApp()) return []
+  try {
+    return await tauriInvoke<PortEntry[]>('scan_active_ports')
+  } catch {
+    return []
+  }
+}
+
+export async function killProcessByPid(pid: number): Promise<string> {
+  if (!isTauriApp()) return 'Not running in Tauri'
+  return await tauriInvoke<string>('kill_process_by_pid', { pid })
+}
+
+export async function getDirectoryTree(root: string, maxDepth?: number): Promise<TreeEntry[]> {
+  if (!isTauriApp()) return []
+  try {
+    return await tauriInvoke<TreeEntry[]>('get_directory_tree', { root, maxDepth: maxDepth ?? 3 })
+  } catch {
+    return []
+  }
+}
+
+export interface AIChatCompletionRequest {
+  provider: string
+  api_key: string
+  model: string
+  endpoint?: string
+  messages: Array<{ role: string; content: string }>
+  max_tokens?: number
+}
+
+export interface AIChatCompletionResponse {
+  content: string
+  model: string
+  provider: string
+  tokens_used: number
+}
+
+export async function aiChatCompletion(request: AIChatCompletionRequest): Promise<AIChatCompletionResponse> {
+  if (!isTauriApp()) {
+    return { content: 'AI is only available in the desktop app.', model: '', provider: '', tokens_used: 0 }
+  }
+  return await tauriInvoke<AIChatCompletionResponse>('ai_chat_completion', { request })
+}
+
+export async function sendDesktopNotification(title: string, body: string): Promise<void> {
+  if (!isTauriApp()) return
+  try {
+    const { sendNotification, isPermissionGranted, requestPermission } = await import('@tauri-apps/plugin-notification')
+    let granted = await isPermissionGranted()
+    if (!granted) {
+      const permission = await requestPermission()
+      granted = permission === 'granted'
+    }
+    if (granted) {
+      sendNotification({ title, body })
+    }
+  } catch (e) {
+    console.error('Notification error:', e)
+  }
+}
+
+export async function handleDroppedFiles(paths: string[]): Promise<DroppedFileResult[]> {
+  if (!isTauriApp()) {
+    return []
+  }
+
+  try {
+    return await tauriInvoke<DroppedFileResult[]>('handle_dropped_files', { paths })
+  } catch {
+    return []
   }
 }

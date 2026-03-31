@@ -119,9 +119,9 @@ export function PromptsPage() {
         )}
 
         {activeTab === 'my' && prompts.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 cascade-in">
             {filteredPrompts.map((p) => (
-              <div key={p.id} className="premium-panel group overflow-hidden p-5 transition-all duration-300 hover:-translate-y-1">
+              <div key={p.id} className="group overflow-hidden p-5 liquid-glass hover-lift-3d chromatic-border rounded-[24px]">
                 <div className="mb-3 flex items-start justify-between">
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>Custom</div>
